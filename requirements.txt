@@ -5,4 +5,7 @@ psutil == 5.9.*
 # memory_profiler == 0.61.*
 
 # Algorithms
-hyperloglog
+hyperloglog == 0.0.*  # 0.0.14 used
+
+# Convenience stuff
+Munch == 2.5.*
