@@ -1,0 +1,8 @@
+# Python 3.11
+
+# Memory profiling:
+psutil == 5.9.*
+# memory_profiler == 0.61.*
+
+# Algorithms
+hyperloglog
