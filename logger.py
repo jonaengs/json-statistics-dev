@@ -16,7 +16,7 @@ class Singleton(type):
 
 
 class Logger(metaclass=Singleton):
-    quiet = settings.logger.quiet
+    silenced = settings.logger.quiet
     
 
     def __init__(self) -> None:
@@ -28,8 +28,8 @@ class Logger(metaclass=Singleton):
         # Register cleanup function to be called when object is destroyed
         weakref.finalize(self, self.cleanup)
 
-    def log(self, *args, **kwargs):
-        if not self.quiet:
+    def log(self, *args, quiet=False, **kwargs):
+        if not self.silenced or not quiet:
             print(*args, **kwargs)
 
         print(*args, **kwargs, file=self.file)
@@ -50,6 +50,6 @@ assert Logger() is Logger()
 # Stop logger printing stuff after keyboard interrupt
 _original_sigint_handler = signal.getsignal(signal.SIGINT)
 def sigint_handler(signal, frame):
-    Logger().quiet = True
+    Logger().silenced = True
     _original_sigint_handler(signal, frame)
 signal.signal(signal.SIGINT, sigint_handler)

@@ -33,8 +33,8 @@ if __name__ == '__main__':
 
     import logger
     
-    logger.log(" ".join(sys.argv))
-    logger.log(args)
+    logger.log(" ".join(sys.argv), quiet=True)
+    logger.log(args, quiet=True)
 
     import compute
     compute.run()

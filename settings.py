@@ -10,6 +10,13 @@ settings = munchify({
     "stats": {
         "stat_type": StatType.HISTOGRAM,
         "hyperloglog_error": 0.05,
-        "filename": "test"
+        "filename": "test",
+
+        "data_folder": "data/recsys/",
+        "out_folder": "stats/",
+    },
+    "tracking": {
+        "peak_memory": False,
+        "time": False,
     }
 })

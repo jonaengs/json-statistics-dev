@@ -6,6 +6,7 @@ import inspect
 
 import atexit
 
+from settings import settings
 from logger import log
 
 
@@ -60,9 +61,12 @@ class MemoryTracker:
     def __init__(self) -> None:
         self.records = defaultdict(list)
 
-        atexit.register(self.print_results)
+        if settings.tracking.peak_memory:
+            atexit.register(self.print_results)  # ensure results are always printed
 
     def print_results(self):
+        if not self.records: return
+        
         log("\n" + "="*20 + "\n" + "MEMORY RESULTS:\n" + "="*20)
         for f_name, mem in self.records.items():
             log(f"{f_name}  ({len(mem)} call{'s'*(len(mem)>1)}):")
@@ -74,6 +78,9 @@ class MemoryTracker:
             log("-"*30)
 
     def record_peak_memory(self, func):
+        if not settings.tracking.peak_memory:
+            return func
+
         def wrapper(*args, **kwargs):
             if not tracemalloc.is_tracing():
                 tracemalloc.start()
@@ -94,10 +101,12 @@ class Timer:
     def __init__(self):
         self.records = defaultdict(list)
 
-        # ensure results are always printed
-        atexit.register(self.print_results)
+        if settings.tracking.time:
+            atexit.register(self.print_results)  # ensure results are always printed
 
     def print_results(self):
+        if not self.records: return
+
         log("\n" + "="*20 + "\n" + "TIMER RESULTS:\n" + "="*20)
         for f_name, all_ts in self.records.items():
             log(f"{f_name}  ({len(all_ts)} call{'s'*(len(all_ts)>1)}):")
@@ -114,6 +123,9 @@ class Timer:
 
 
     def record_time_used(self, func):
+        if not settings.tracking.time:
+            return func
+
         def wrapper(*args, **kwargs):
             t0_system = time.perf_counter_ns()
             t0_program = time.process_time_ns()

@@ -18,12 +18,12 @@ from logger import log
 
 STATS_TYPE = settings.stats.stat_type
 HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
-log("compute: ", STATS_TYPE)
 
 
 # TODO: Check that the case of repeat keys ({a: 1, a: 2}) is covered. Should be fine as long a json library is used
 # TODO: Figure out a key path format that is unlikely to collide with existing keys
     # Problem: {"a": {"a": []}} and {"a_dict.a": []} gives "a_dict.a_list" = 2
+    # Maybe dashes can be a good idea to use, in addition to dots. Because they will be interpreted as minus signs they shouldn't be used as member names
 # TODO: Instead of parsing json files. Parse MySQL's json binary format
 
 # ==========================================================================================
@@ -52,15 +52,114 @@ log("compute: ", STATS_TYPE)
 # Compute actual selectivity of some clause, then compare to the estimation
     # First: Compare basics like no. els, no. null, min val, max val
     # Then: Compare for clauses like ... > 3, ... = "asdasd",
+        # TODO:: check clauses which demand a string, a number, an object or an array
     # Final (unrealistic): Compare for clauses like JOIN WHERE A.B = ...
+
+
+# NOTE: Only works for floats and ints
+def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
+    print(key_path)
+    print(stat_path)
+
+    def traverse(doc, path: list[str]):
+        if not path: 
+            return doc
+        return traverse(doc[path[0]], path[1:])
+
+
+    with open(data_path) as f:
+        collection = json.load(f)
+
+    count = 0
+    for doc in collection:
+        try:
+            count += traverse(doc, key_path) < compare_value
+        except:
+            pass
+
+
+    def get_cardinality_estimate():
+        data = stats[stat_path]
+        if compare_value < data.min_val:
+            return 0
+
+        match STATS_TYPE:
+            case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+                total_values = data.count - data.null_count
+                value_range = data.max_val - data.min_val
+                min_compare_range = compare_value - data.min_val
+
+                return int(min_compare_range / value_range * total_values)
+            case StatType.HISTOGRAM:
+                # NOTE: Assumed bucket structure [lower_bound, val_count, ndv]
+                estimate = 0
+                bucket_lower_bound = data.min_val
+                for bucket in data.histogram:
+                    if bucket[0] < compare_value:
+                        estimate += bucket[1]
+                        bucket_lower_bound = bucket[0]
+                    elif bucket[0] >= compare_value:
+                        bucket_range = bucket[0] - bucket_lower_bound
+                        valid_value_range = compare_value - bucket_lower_bound
+                        estimate += int(bucket[1] * valid_value_range / bucket_range)
+                        break
+
+                return estimate
+
+    estimate = get_cardinality_estimate()
+    
+    log(count, estimate)
+
+# NOTE: Only works for floats and ints
+def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
+    print(key_path)
+    print(stat_path)
+
+    def traverse(doc, path: list[str]):
+        if not path: 
+            return doc
+        return traverse(doc[path[0]], path[1:])
+
+
+    with open(data_path) as f:
+        collection = json.load(f)
+
+    count = 0
+    for doc in collection:
+        try:
+            count += traverse(doc, key_path) == compare_value
+        except:
+            pass
+
+
+    def get_cardinality_estimate():
+        data = stats[stat_path]
+        if compare_value > data.max_val or compare_value < data.min_val:
+            return 0
+
+        match STATS_TYPE:
+            case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+                return data.count//data.ndv
+
+            case StatType.HISTOGRAM:
+                # NOTE: Assumed bucket structure [lower_bound, val_count, ndv]
+                for bucket in data.histogram:
+                    if bucket[0] >= compare_value:
+                        return bucket[1] // bucket[2]
+
+                return estimate
+
+    estimate = get_cardinality_estimate()
+    
+    log(count, estimate)
 
 
 def compute_cardinality(path, accessor):
     with open(path) as f:
-        docs = json.load(f)
+        collection = json.load(f)
 
     count = 0
-    for doc in docs:
+    for doc in collection:
         try:
             accessor(doc)
             count += 1
@@ -71,10 +170,10 @@ def compute_cardinality(path, accessor):
 
 def compute_ndv(path, accessor):
     with open(path) as f:
-        docs = json.load(f)
+        collection = json.load(f)
 
     els = set()
-    for doc in docs:
+    for doc in collection:
         try:
             els.add(accessor(doc)) 
         except:
@@ -344,29 +443,37 @@ def get_stats_data(path, accessor):
 def run():
     log(f"using {StatType(STATS_TYPE).name} StatType")
 
-    data_path = f"data/recsys/{settings.stats.filename}.json"
-    stats_path = f"stats/{settings.stats.filename}.json"
+
+    data_path = f"{settings.stats.data_folder}{settings.stats.filename}.json"
+    out_path = f"{settings.stats.out_folder}/{settings.stats.filename}.json"
 
     with open(data_path) as f:
-        stats = make_statistics(json.load(f)[:1000])
+        stats = make_statistics(json.load(f))
         # plog(stats[0])
         # log("-"*50)
         # plog(stats[1])
         # log("-"*50)
 
-    with open(stats_path, mode="w") as f:
+    with open(out_path, mode="w") as f:
         log(len(json.dumps(stats, cls=KeyStatEncoder)))
         json.dump(stats, f, cls=KeyStatEncoder)
 
+
+    # "entities_object.hashtags_array.0_object.indices_array.0_int"
+    stat_path = "entities_object.hashtags_array.0_object.indices_array.0_int"
+    key_path = ["entities", "hashtags", 0, "indices", 0]
+    compare_lt_estimate(data_path, key_path, stats[0], stat_path, 150)
+    compare_eq_estimate(data_path, key_path, stats[0], stat_path, 150)
+
     # log(compute_cardinality(data_path, lambda d: d["entities"]["urls"][0]["url"]))
-    # log(get_stats_data(stats_path, lambda d: d["entities_object.urls_array.0_object.url_str"])["count"])
+    # log(get_stats_data(out_path, lambda d: d["entities_object.urls_array.0_object.url_str"])["count"])
     # log()
     
     # log(compute_ndv(data_path, lambda d: d["entities"]["urls"][0]["url"]))
-    # log(get_stats_data(stats_path, lambda d: d["entities_object.urls_array.0_object.url_str"])["ndv"])
+    # log(get_stats_data(out_path, lambda d: d["entities_object.urls_array.0_object.url_str"])["ndv"])
     # log()
 
     # # "entities_object.hashtags_array.0_object.text_str"
     # log(compute_ndv(data_path, lambda d: d["entities"]["hashtags"][0]["text"]))
-    # log(get_stats_data(stats_path, lambda d: d["entities_object.hashtags_array.0_object.text_str"])["ndv"])
+    # log(get_stats_data(out_path, lambda d: d["entities_object.hashtags_array.0_object.text_str"])["ndv"])
     # log()
