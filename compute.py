@@ -1,17 +1,15 @@
 from dataclasses import dataclass, asdict
-from enum import Enum
 import json
 from collections import defaultdict, namedtuple
 import math
+from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
 import struct
 from compute_structures import StatType
 
-from utils import timer, print_total_memory_use, mem_tracker
-
+from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
-
 from logger import log
 
 
@@ -55,82 +53,112 @@ HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
         # TODO:: check clauses which demand a string, a number, an object or an array
     # Final (unrealistic): Compare for clauses like JOIN WHERE A.B = ...
 
-
-# NOTE: Only works for floats and ints
-def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
-    print(key_path)
-    print(stat_path)
-
+@time_tracker.record_time_used
+def get_operation_cardinality(file_path, key_path, operation: Callable[[Any], bool]):
     def traverse(doc, path: list[str]):
         if not path: 
             return doc
         return traverse(doc[path[0]], path[1:])
 
 
-    with open(data_path) as f:
+    with open(file_path) as f:
         collection = json.load(f)
 
     count = 0
     for doc in collection:
         try:
-            count += traverse(doc, key_path) < compare_value
+            count += operation(traverse(doc, key_path))
         except:
             pass
 
+    return count
 
+
+# NOTE: Only works for floats and ints
+def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
+
+    # return compare_range_estimate(data_path, key_path, stats, stat_path, range(stats[stat_path].min_val, compare_value))
+    
     def get_cardinality_estimate():
         data = stats[stat_path]
-        if compare_value < data.min_val:
+        if compare_value <= data.min_val:
             return 0
 
         match STATS_TYPE:
             case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
-                total_values = data.count - data.null_count
-                value_range = data.max_val - data.min_val
-                min_compare_range = compare_value - data.min_val
+                data_range = data.max_val - data.min_val
+                compare_range = (compare_value - 1) - data.min_val
+                overlap = compare_range / data_range
 
-                return int(min_compare_range / value_range * total_values)
+                return int(overlap * data.valid_count)
             case StatType.HISTOGRAM:
-                # NOTE: Assumed bucket structure [lower_bound, val_count, ndv]
+                # NOTE: Assumed bucket structure [upper_bound, val_count, ndv]
+                Bucket = namedtuple("Bucket", ["upper_bound", "count", "ndv"])
+
                 estimate = 0
                 bucket_lower_bound = data.min_val
-                for bucket in data.histogram:
-                    if bucket[0] < compare_value:
-                        estimate += bucket[1]
-                        bucket_lower_bound = bucket[0]
-                    elif bucket[0] >= compare_value:
-                        bucket_range = bucket[0] - bucket_lower_bound
-                        valid_value_range = compare_value - bucket_lower_bound
-                        estimate += int(bucket[1] * valid_value_range / bucket_range)
+                for bucket in map(lambda b: Bucket(*b), data.histogram):
+                    if bucket.upper_bound < compare_value:
+                        estimate += bucket.count
+                    elif bucket.upper_bound >= compare_value:
+                        bucket_range = bucket.upper_bound - bucket_lower_bound
+                        valid_value_range = (compare_value - 1) - bucket_lower_bound
+                        overlap = valid_value_range / bucket_range
+                        estimate += bucket.count * overlap
                         break
 
-                return estimate
+                    bucket_lower_bound = bucket.upper_bound
 
+
+                return int(estimate)
+
+    true_card = get_operation_cardinality(data_path, key_path, lambda x: x < compare_value)
     estimate = get_cardinality_estimate()
     
-    log(count, estimate)
+    log(true_card, estimate)
+
+# NOTE: Only works for floats and ints
+# Assume range is inclusive lower excluse upper, like a python range
+def compare_range_estimate(data_path, key_path: list[str], stats: dict, stat_path: str, q_range: range):
+    def get_cardinality_estimate():
+        data: KeyStat = stats[stat_path]
+
+        match STATS_TYPE:
+            case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+                valid_range = min(data.max_val, q_range.stop - 1) - max(data.min_val, q_range.start)
+                data_range = data.max_val - data.min_val
+                overlap = valid_range / (data_range)
+
+                return int(overlap * data.valid_count)
+
+            case StatType.HISTOGRAM:
+                # NOTE: Assumed bucket structure [upper_bound, val_count, ndv]
+                Bucket = namedtuple("Bucket", ["upper_bound", "count", "ndv"])
+
+                estimate = 0
+                bucket_lower_bound = data.min_val
+                for bucket in map(lambda b: Bucket(*b), data.histogram):
+                    valid_range = min(bucket.upper_bound, q_range.stop - 1) - max(bucket_lower_bound, q_range.start)
+                    bucket_range = bucket.upper_bound - bucket_lower_bound
+                    overlap = valid_range / bucket_range
+                    
+                    estimate += overlap * bucket.count
+
+                    bucket_lower_bound = bucket.upper_bound
+                    
+                    if bucket_lower_bound >= q_range.stop:
+                        break
+
+                return int(estimate)
+    
+    true_card = get_operation_cardinality(data_path, key_path, lambda x: x in q_range)
+    estimate = get_cardinality_estimate()
+    
+    log(true_card, estimate)
 
 # NOTE: Only works for floats and ints
 def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
-    print(key_path)
-    print(stat_path)
-
-    def traverse(doc, path: list[str]):
-        if not path: 
-            return doc
-        return traverse(doc[path[0]], path[1:])
-
-
-    with open(data_path) as f:
-        collection = json.load(f)
-
-    count = 0
-    for doc in collection:
-        try:
-            count += traverse(doc, key_path) == compare_value
-        except:
-            pass
-
+    true_card = get_operation_cardinality(data_path, key_path, lambda x: x == compare_value)
 
     def get_cardinality_estimate():
         data = stats[stat_path]
@@ -138,20 +166,24 @@ def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, c
             return 0
 
         match STATS_TYPE:
-            case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
-                return data.count//data.ndv
+            case StatType.BASIC:
+                return None
+            case StatType.BASIC_NDV | StatType.HYPERLOG:
+                return data.valid_count//data.ndv
 
             case StatType.HISTOGRAM:
-                # NOTE: Assumed bucket structure [lower_bound, val_count, ndv]
-                for bucket in data.histogram:
-                    if bucket[0] >= compare_value:
-                        return bucket[1] // bucket[2]
+                Bucket = namedtuple("Bucket", ["upper_bound", "count", "ndv"])
+
+                for bucket in map(lambda b: Bucket(*b), data.histogram):
+                    if bucket.upper_bound >= compare_value:
+                        # Assume uniform distribution, so return count divided by ndv
+                        return int(bucket.count / bucket.ndv)
 
                 return estimate
 
     estimate = get_cardinality_estimate()
     
-    log(count, estimate)
+    log(true_card, estimate)
 
 
 def compute_cardinality(path, accessor):
@@ -193,6 +225,10 @@ class KeyStat:
     def __repr__(self) -> str:
         return str({k:v for k, v in asdict(self).items() if v is not None})
 
+    @property
+    def valid_count(self):
+        return self.count - self.null_count
+
 
 class KeyStatEncoder(json.JSONEncoder):
     def default(self, o):
@@ -206,10 +242,11 @@ HistBucket = namedtuple("HistBucket", ["upper_bound", "height", "ndv"])
 
 
 # Creates an equi-height histogram for the data in the array
+# Bucket structure is as follows: [upper_bound, count, ndv]. Upper bound is inclusive
 # Very naive algorithm. See MySQL src (sql/histograms/equi_height.cc) for a better approach
 # Note: Mutates the argument array
-@mem_tracker.record_peak_memory
-@timer.record_time_used
+@local_mem_tracker.record_peak_memory
+@time_tracker.record_time_used
 def compute_histogram(arr, nbins=10):
     min_bucket_size = len(arr)/nbins
     arr.sort()
@@ -238,8 +275,8 @@ def compute_histogram(arr, nbins=10):
     return histogram
 
 
-@mem_tracker.record_peak_memory
-@timer.record_time_used
+@local_mem_tracker.record_peak_memory
+@time_tracker.record_time_used
 def make_base_statistics(collection):
     """
     STATS TYPES:
@@ -351,11 +388,11 @@ def make_base_statistics(collection):
 
 
     log(f"creating statistics for a collection of {len(collection)} documents...")
-    print_total_memory_use()
+    global_mem_tracker.record_global_memory()
     for doc in collection:
         traverse(doc)
     
-    print_total_memory_use()
+    global_mem_tracker.record_global_memory()
     if STATS_TYPE == StatType.BASIC_NDV:
         # Compute KeyStat object for primitive value lists
         for key in stats:
@@ -393,7 +430,7 @@ def make_base_statistics(collection):
                 )
         
 
-    print_total_memory_use()
+    global_mem_tracker.record_global_memory()
 
     return dict(stats)
 
@@ -424,7 +461,8 @@ def make_statistics(collection) -> list[dict, dict]:
     summary_stats = {
         "min_count_included": min_count_included,
         "min_count_threshold": min_count_threshold,
-        "collection_size": len(collection)
+        "collection_size": len(collection),
+        "stats_type": STATS_TYPE.name
     }
     return [pruned_path_stats, summary_stats]
 
@@ -443,27 +481,36 @@ def get_stats_data(path, accessor):
 def run():
     log(f"using {StatType(STATS_TYPE).name} StatType")
 
-
     data_path = f"{settings.stats.data_folder}{settings.stats.filename}.json"
     out_path = f"{settings.stats.out_folder}/{settings.stats.filename}.json"
 
-    with open(data_path) as f:
-        stats = make_statistics(json.load(f))
-        # plog(stats[0])
-        # log("-"*50)
-        # plog(stats[1])
-        # log("-"*50)
+    with open(out_path) as f:
+        existing_stats = json.load(f)
+        if not settings.stats.force_new and existing_stats and existing_stats[1]["stats_type"] == STATS_TYPE.name:
+            stats = existing_stats
+            log("Using pre-existing stats...")
+            for k in stats[0]:
+                stats[0][k] = KeyStat(**stats[0][k])
+        else:
+            log("Creating new stats...")
+            with open(data_path) as f:
+                stats = make_statistics(json.load(f))
+                # plog(stats[0])
+                # log("-"*50)
+                # plog(stats[1])
+                # log("-"*50)
 
-    with open(out_path, mode="w") as f:
-        log(len(json.dumps(stats, cls=KeyStatEncoder)))
-        json.dump(stats, f, cls=KeyStatEncoder)
-
+            log("Storing new stats...")
+            with open(out_path, mode="w") as f:
+                log(len(json.dumps(stats, cls=KeyStatEncoder)))
+                json.dump(stats, f, cls=KeyStatEncoder)
 
     # "entities_object.hashtags_array.0_object.indices_array.0_int"
     stat_path = "entities_object.hashtags_array.0_object.indices_array.0_int"
     key_path = ["entities", "hashtags", 0, "indices", 0]
-    compare_lt_estimate(data_path, key_path, stats[0], stat_path, 150)
-    compare_eq_estimate(data_path, key_path, stats[0], stat_path, 150)
+    compare_lt_estimate(data_path, key_path, stats[0], stat_path, 70)
+    compare_eq_estimate(data_path, key_path, stats[0], stat_path, 100)
+    compare_range_estimate(data_path, key_path, stats[0], stat_path, range(-1, 70))
 
     # log(compute_cardinality(data_path, lambda d: d["entities"]["urls"][0]["url"]))
     # log(get_stats_data(out_path, lambda d: d["entities_object.urls_array.0_object.url_str"])["count"])

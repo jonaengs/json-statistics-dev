@@ -1,6 +1,8 @@
+import inspect
 import time
 import weakref
 import signal 
+import os
 
 from settings import settings
 
@@ -17,20 +19,33 @@ class Singleton(type):
 
 class Logger(metaclass=Singleton):
     silenced = settings.logger.quiet
-    
+    n_logs_to_keep = 5
 
     def __init__(self) -> None:
-        log_file_path = f"logs/{time.time_ns()}.log"
 
-        open(log_file_path, mode="x") # Fail if file already exists
+        # Create lig file, failing if the file already exists
+        log_file_path = f"{settings.logger.out_dir}/{time.time_ns()}.log"
+        open(log_file_path, mode="x") 
         self.file = open(log_file_path, mode="w")
 
-        # Register cleanup function to be called when object is destroyed
+        # Register cleanup function to be called when this is destroyed
         weakref.finalize(self, self.cleanup)
 
+        # Remove old log files
+        files = list(map(lambda f: os.path.join(settings.logger.out_dir, f), os.listdir(settings.logger.out_dir)))
+        if len(files) > self.n_logs_to_keep:
+            files.sort(key=lambda p: os.path.getmtime(p))
+            for f in files[:-self.n_logs_to_keep]:
+                os.remove(f)
+
     def log(self, *args, quiet=False, **kwargs):
-        if not self.silenced or not quiet:
+        if not self.silenced and not quiet:
             print(*args, **kwargs)
+
+        # caller_frame = inspect.currentframe().f_back
+        # file_path, file_line, *_ = inspect.getframeinfo(caller_frame)
+        # file_name = file_path.split("\\")[-1]
+        # print(f"{file_name}:{file_line}", end="\t", file=self.file)
 
         print(*args, **kwargs, file=self.file)
 
