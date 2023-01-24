@@ -2,11 +2,13 @@ from dataclasses import dataclass, asdict
 import json
 from collections import defaultdict, namedtuple
 import math
+import os
+import random
 from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
 import struct
-from compute_structures import StatType
+from compute_structures import HistBucket, KeyStat, KeyStatEncoder, StatType
 
 from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
@@ -16,6 +18,7 @@ from logger import log
 
 STATS_TYPE = settings.stats.stat_type
 HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
+SAMPLING_RATIO = 0
 
 
 # TODO: Check that the case of repeat keys ({a: 1, a: 2}) is covered. Should be fine as long a json library is used
@@ -39,6 +42,7 @@ HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
 * Q: Should we differentiate between floats and ints? JSON doesn't, and MySQL doesn't when querying. So we shouldn't either 
     On the other hand, histograms are much simpler to create for ints than for floats. 
     So if all vals in a keypath are ints, that could enable better/simpler statistics
+    Problem: using sampling, we can't really know if all values associated with a key are ints. 
 * Q: Do we track min and max values for strings? Less useful than for numbers, and more expensive to calculate (and possibly store)
     I say no, for now.
 """
@@ -52,6 +56,21 @@ HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
     # Then: Compare for clauses like ... > 3, ... = "asdasd",
         # TODO:: check clauses which demand a string, a number, an object or an array
     # Final (unrealistic): Compare for clauses like JOIN WHERE A.B = ...
+
+
+
+# VARIABLES that can be tuned
+# Histogram size  (look into histogram techniques. Can we optimize for uniformity, for example?)
+# Statistics approach
+# Pruning approach (also: combinations of them, like prefix/postfix length and min freq)
+# Sampling ratio
+# (Kinda) Data set makeup (heterogeneity, sparseness)
+# Combining floats and ints into "number"
+
+# Undersøk: sampling osv. 
+# Compression av nøkler. Veldig like nøkler rett ved siden av hverandre burde ikke være så vanskelig
+    # Typ: "retweeted_status_object.entities_object.hashtags_array.1_object.indices_array.0_int" 
+    # og   "retweeted_status_object.entities_object.hashtags_array.1_object.indices_array.1_int"
 
 @time_tracker.record_time_used
 def get_operation_cardinality(file_path, key_path, operation: Callable[[Any], bool]):
@@ -76,10 +95,9 @@ def get_operation_cardinality(file_path, key_path, operation: Callable[[Any], bo
 
 # NOTE: Only works for floats and ints
 def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
-
-    # return compare_range_estimate(data_path, key_path, stats, stat_path, range(stats[stat_path].min_val, compare_value))
-    
     def get_cardinality_estimate():
+        # return compare_range_estimate(data_path, key_path, stats, stat_path, range(stats[stat_path].min_val, compare_value))
+        
         data = stats[stat_path]
         if compare_value <= data.min_val:
             return 0
@@ -93,11 +111,10 @@ def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, c
                 return int(overlap * data.valid_count)
             case StatType.HISTOGRAM:
                 # NOTE: Assumed bucket structure [upper_bound, val_count, ndv]
-                Bucket = namedtuple("Bucket", ["upper_bound", "count", "ndv"])
 
                 estimate = 0
                 bucket_lower_bound = data.min_val
-                for bucket in map(lambda b: Bucket(*b), data.histogram):
+                for bucket in map(lambda b: HistBucket(*b), data.histogram):
                     if bucket.upper_bound < compare_value:
                         estimate += bucket.count
                     elif bucket.upper_bound >= compare_value:
@@ -133,11 +150,10 @@ def compare_range_estimate(data_path, key_path: list[str], stats: dict, stat_pat
 
             case StatType.HISTOGRAM:
                 # NOTE: Assumed bucket structure [upper_bound, val_count, ndv]
-                Bucket = namedtuple("Bucket", ["upper_bound", "count", "ndv"])
 
                 estimate = 0
                 bucket_lower_bound = data.min_val
-                for bucket in map(lambda b: Bucket(*b), data.histogram):
+                for bucket in map(lambda b: HistBucket(*b), data.histogram):
                     valid_range = min(bucket.upper_bound, q_range.stop - 1) - max(bucket_lower_bound, q_range.start)
                     bucket_range = bucket.upper_bound - bucket_lower_bound
                     overlap = valid_range / bucket_range
@@ -158,8 +174,6 @@ def compare_range_estimate(data_path, key_path: list[str], stats: dict, stat_pat
 
 # NOTE: Only works for floats and ints
 def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, compare_value):
-    true_card = get_operation_cardinality(data_path, key_path, lambda x: x == compare_value)
-
     def get_cardinality_estimate():
         data = stats[stat_path]
         if compare_value > data.max_val or compare_value < data.min_val:
@@ -181,24 +195,22 @@ def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, c
 
                 return estimate
 
+    true_card = get_operation_cardinality(data_path, key_path, lambda x: x == compare_value)
     estimate = get_cardinality_estimate()
     
     log(true_card, estimate)
 
 
-def compute_cardinality(path, accessor):
-    with open(path) as f:
-        collection = json.load(f)
+def compare_card_estimate(data_path, key_path: list[str], stats, stat_path: str):
+    def get_cardinality_estimate():
+        data = stats[stat_path]
+        return data.count
 
-    count = 0
-    for doc in collection:
-        try:
-            accessor(doc)
-            count += 1
-        except:
-            pass
+    true_card = get_operation_cardinality(data_path, key_path, lambda:1)
+    estimate = get_cardinality_estimate()
+    
+    log(true_card, estimate)
 
-    return count
 
 def compute_ndv(path, accessor):
     with open(path) as f:
@@ -213,32 +225,6 @@ def compute_ndv(path, accessor):
 
     return len(els)
 
-@dataclass
-class KeyStat:
-    count: int = 0
-    null_count: int = 0
-    min_val: (None | int) = None
-    max_val: (None | int) = None
-    ndv: (None | int) = None
-    histogram: (None | list[int]) = None
-
-    def __repr__(self) -> str:
-        return str({k:v for k, v in asdict(self).items() if v is not None})
-
-    @property
-    def valid_count(self):
-        return self.count - self.null_count
-
-
-class KeyStatEncoder(json.JSONEncoder):
-    def default(self, o):
-        if type(o) == KeyStat:
-            # return asdict(o)
-            return {k:v for k, v in asdict(o).items() if v is not None}  # exclude None-fields
-        return super().default(o)
-
-
-HistBucket = namedtuple("HistBucket", ["upper_bound", "height", "ndv"])
 
 
 # Creates an equi-height histogram for the data in the array
@@ -247,8 +233,8 @@ HistBucket = namedtuple("HistBucket", ["upper_bound", "height", "ndv"])
 # Note: Mutates the argument array
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr, nbins=10):
-    min_bucket_size = len(arr)/nbins
+def compute_histogram(arr, nbins=200):
+    min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
     histogram = []
@@ -293,7 +279,8 @@ def make_base_statistics(collection):
         type_str = {
             list: "array",
             dict: "object",
-            None.__class__: "", 
+            None.__class__: "",
+            # int: "number", float: "number"
         }.get(type(val), type(val).__name__)
 
         parent_path = _parent_path + (_parent_path and ".")
@@ -362,7 +349,6 @@ def make_base_statistics(collection):
                 assert False, f"statistics {STATS_TYPE} type not supported"
             
 
-    
     stats = {
         StatType.BASIC: defaultdict(KeyStat),
         StatType.BASIC_NDV: dict(), # stats[key] is either a list or a KeyStat object
@@ -390,7 +376,10 @@ def make_base_statistics(collection):
     log(f"creating statistics for a collection of {len(collection)} documents...")
     global_mem_tracker.record_global_memory()
     for doc in collection:
-        traverse(doc)
+        # TODO: Should maybe be done in blocks of N docs at a time, to emulate page sampling as used in real systems
+        # TODO: Is python's random faulty in any way? It should be fine for this purpose, right?
+        if (random.random() > SAMPLING_RATIO):
+            traverse(doc)
     
     global_mem_tracker.record_global_memory()
     if STATS_TYPE == StatType.BASIC_NDV:
@@ -438,9 +427,11 @@ def make_base_statistics(collection):
 # Removes uncommon paths. Returns some summary statistics as well
 def make_statistics(collection) -> list[dict, dict]:
     # Tunable vars:
-    MIN_FREQ_THRESHOLD = 0.001
+    MIN_FREQ_THRESHOLD = 0.00
     # MAX_NUM_PATHS_TRACKED
     # MAX_PATH_DEPTH (seems terrible, but eh)
+    # Max Prefix length, Max postfix length (prune middle keys)
+        # Look at what JSON PATH in MySQL allows. Like wildcards
 
     base_stats = make_base_statistics(collection)
 
@@ -457,12 +448,12 @@ def make_statistics(collection) -> list[dict, dict]:
     num_pruned = len(base_stats) - len(pruned_path_stats)
     log("num_pruned", num_pruned, f"({len(base_stats)} unique paths total)")
 
-    # TODO: Store sampling ratio/frequency?
     summary_stats = {
         "min_count_included": min_count_included,
         "min_count_threshold": min_count_threshold,
         "collection_size": len(collection),
-        "stats_type": STATS_TYPE.name
+        "stats_type": STATS_TYPE.name,
+        "sampling_ratio": SAMPLING_RATIO,
     }
     return [pruned_path_stats, summary_stats]
 
@@ -481,29 +472,35 @@ def get_stats_data(path, accessor):
 def run():
     log(f"using {StatType(STATS_TYPE).name} StatType")
 
-    data_path = f"{settings.stats.data_folder}{settings.stats.filename}.json"
-    out_path = f"{settings.stats.out_folder}/{settings.stats.filename}.json"
+    data_path = settings.stats.data_path
+    out_path = settings.stats.out_path
 
-    with open(out_path) as f:
-        existing_stats = json.load(f)
-        if not settings.stats.force_new and existing_stats and existing_stats[1]["stats_type"] == STATS_TYPE.name:
-            stats = existing_stats
-            log("Using pre-existing stats...")
-            for k in stats[0]:
-                stats[0][k] = KeyStat(**stats[0][k])
-        else:
-            log("Creating new stats...")
-            with open(data_path) as f:
-                stats = make_statistics(json.load(f))
-                # plog(stats[0])
-                # log("-"*50)
-                # plog(stats[1])
-                # log("-"*50)
+    def store_stats():
+        log("Creating new stats...")
+        with open(data_path) as f:
+            stats = make_statistics(json.load(f))
 
-            log("Storing new stats...")
-            with open(out_path, mode="w") as f:
-                log(len(json.dumps(stats, cls=KeyStatEncoder)))
-                json.dump(stats, f, cls=KeyStatEncoder)
+        log("Storing new stats...")
+        with open(out_path, mode="w") as f:
+            log(len(json.dumps(stats, cls=KeyStatEncoder)))
+            json.dump(stats, f, cls=KeyStatEncoder)
+
+        return stats
+
+    if os.path.exists(out_path) and not settings.stats.force_new:
+        with open(out_path, "r") as f:
+            existing_stats = json.load(f)
+            if existing_stats and existing_stats[1]["stats_type"] == STATS_TYPE.name:
+                stats = existing_stats
+                log("Using pre-existing stats...")
+                for k in stats[0]:
+                    stats[0][k] = KeyStat(**stats[0][k])
+
+            else:
+                stats = store_stats()
+    else:
+        stats = store_stats()
+
 
     # "entities_object.hashtags_array.0_object.indices_array.0_int"
     stat_path = "entities_object.hashtags_array.0_object.indices_array.0_int"
