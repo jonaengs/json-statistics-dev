@@ -3,9 +3,9 @@ import types
 import inspect
 from munch import Munch, munchify
 
-from compute_structures import StatType
+from compute_structures import PruneStrat, StatType
 
-# munchify converts the dictionary to an object, similar to in javascript. Allows dot notation for member accesss
+# munchify converts the dictionary to an object, similar to in Javascript. Allows dot notation for member accesss
 settings = munchify({
     "logger": {
         "quiet": False,
@@ -14,7 +14,7 @@ settings = munchify({
     "stats": {
         "stat_type": StatType.HISTOGRAM,
         "hyperloglog_error": 0.05,
-        "filename": "test",
+        "filename": "mini",
 
         "force_new": False,
         "data_dir": "data/recsys/",
@@ -22,6 +22,33 @@ settings = munchify({
 
         "data_path": lambda self, *_: os.path.join(self.data_dir, self.filename) + ".json",
         "out_path": lambda self, *_: os.path.join(self.out_dir, self.filename) + ".json",
+
+        "prune_strats": [PruneStrat.MIN_FREQ],
+        "prune_params": {
+            PruneStrat.MIN_FREQ: {
+                "threshold": 0.01
+            },
+            PruneStrat.MAX_NO_PATHS: {
+                "threshold": 100
+            },
+            PruneStrat.MAX_PREFIX_LENGTH: {
+                "threshold": 3
+            },
+        },
+        # "prune_params": [
+        #     {
+        #         "strat": PruneStrat.MIN_FREQ,
+        #         "threshold": 0.01
+        #     },
+        #     {
+        #         "strat": PruneStrat.MAX_NO_PATHS,
+        #         "threshold": 100
+        #     },
+        #     {
+        #         "strat": PruneStrat.PRUNE_PREFIX,
+        #         "threshold": 3
+        #     },
+        # ],
     },
     "tracking": {
         "print_tracking": False,
@@ -60,3 +87,6 @@ if __name__ == '__main__':
     print(settings.stats.out_path)
     settings.stats.filename = "adasdasd"
     print(settings.stats.out_path)
+
+    # import yaml
+    # print(yaml.safe_dump(settings))

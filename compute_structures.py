@@ -3,12 +3,17 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import json
 
-
 class StatType(Enum):
     BASIC = 1
     BASIC_NDV = 2
     HYPERLOG = 3
     HISTOGRAM = 4
+
+
+class PruneStrat(Enum):
+    MIN_FREQ = 1
+    MAX_NO_PATHS = 2
+    MAX_PREFIX_LENGTH = 3
 
 
 @dataclass
@@ -31,8 +36,7 @@ class KeyStat:
 class KeyStatEncoder(json.JSONEncoder):
     def default(self, o):
         if type(o) == KeyStat:
-            # return asdict(o)
-            return {k:v for k, v in asdict(o).items() if v is not None}  # exclude None-fields
+            return {k:v for k, v in asdict(o).items() if v is not None}  # exclude None-valued fields
         return super().default(o)   
 
 HistBucket = namedtuple("HistBucket", ["upper_bound", "count", "ndv"])

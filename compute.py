@@ -8,7 +8,7 @@ from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
 import struct
-from compute_structures import HistBucket, KeyStat, KeyStatEncoder, StatType
+from compute_structures import HistBucket, KeyStat, KeyStatEncoder, PruneStrat, StatType
 
 from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
@@ -269,6 +269,21 @@ def compute_histogram(arr, nbins=200):
     return histogram
 
 
+def make_key_path(_parent_path, key, val)-> tuple[str, str]:
+    """returns key path with and without the value type suffix, respectively"""
+    type_str = {
+        list: "array",
+        dict: "object",
+        None.__class__: "",
+        # bool: "boolean",
+        int: "number", float: "number"
+    }.get(type(val), type(val).__name__)
+
+    parent_path = _parent_path + (_parent_path and ".")
+
+    return parent_path + str(key) + ("_" + type_str if type_str else ""), parent_path + str(key)
+
+
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
 def make_base_statistics(collection):
@@ -282,20 +297,6 @@ def make_base_statistics(collection):
     4. Histograms. 
         Naive approach, so this will again require us to store all values
     """
-
-    def make_key_path(_parent_path, key, val)-> tuple[str, str]:
-        """returns key path with and without the value type suffix, respectively"""
-        type_str = {
-            list: "array",
-            dict: "object",
-            None.__class__: "",
-            # bool: "boolean",
-            int: "number", float: "number"
-        }.get(type(val), type(val).__name__)
-
-        parent_path = _parent_path + (_parent_path and ".")
-
-        return parent_path + str(key) + ("_" + type_str if type_str else ""), parent_path + str(key)
     
     def record_path_stats(stats, parent_path, key, val) -> str:
         match STATS_TYPE:
@@ -437,8 +438,8 @@ def make_base_statistics(collection):
 # Removes uncommon paths. Returns some summary statistics as well
 def make_statistics(collection) -> list[dict, dict]:
     # Tunable vars:
-    MIN_FREQ_THRESHOLD = 0.01
-    # MAX_NUM_PATHS_TRACKED
+    MIN_FREQ_THRESHOLD = settings.stats.prune_params[PruneStrat.MIN_FREQ].threshold
+    MAX_NUM_PATHS = settings.stats.prune_params[PruneStrat.MAX_NO_PATHS].threshold
     # MAX_PATH_DEPTH (seems terrible, but eh)
     # Max Prefix length, Max postfix length (prune middle keys)
         # Look at what JSON PATH in MySQL allows. Like wildcards
@@ -449,10 +450,19 @@ def make_statistics(collection) -> list[dict, dict]:
 
     pruned_path_stats = {}
     min_count_included = None
-    for key_path, path_stats in base_stats.items():
-        if path_stats.count >= min_count_threshold:
-            min_count_included = min(min_count_included or math.inf, path_stats.count)
-            pruned_path_stats[key_path] = path_stats
+
+    if PruneStrat.MIN_FREQ in settings.stats.prune_strats:
+        for key_path, path_stats in base_stats.items():
+            if path_stats.count >= min_count_threshold:
+                min_count_included = min(min_count_included or math.inf, path_stats.count)
+                pruned_path_stats[key_path] = path_stats
+    else:
+        pruned_path_stats = base_stats
+
+    if PruneStrat.MAX_NO_PATHS in settings.stats.prune_strats:
+        if len(pruned_path_stats) > MAX_NUM_PATHS:
+            sorted_by_count = list(sorted(pruned_path_stats.items(), key=lambda t: t[1].count, reverse=True))
+            pruned_path_stats = dict(sorted_by_count[:MAX_NUM_PATHS])
 
     
     num_pruned = len(base_stats) - len(pruned_path_stats)

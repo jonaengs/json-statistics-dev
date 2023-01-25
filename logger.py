@@ -5,6 +5,8 @@ import weakref
 import signal 
 import os
 
+from munch import Munch
+
 from settings import settings
 
 
@@ -54,12 +56,15 @@ class Logger(metaclass=Singleton):
     def log_settings(self, quiet=True):
         def rec_log(root, indent):
             for key, child in root.items():
-                if type(child) == type(root):
+                if type(child) == Munch:
                     self.log('\t'*indent + str(key) + ":", quiet=quiet)
                     rec_log(child, indent+1)
                 else:
                     if type(child) == types.MethodType:
                         self.log('\t'*indent + f"{key}:\t<bound method {child.__name__}>", quiet=quiet)
+                    elif type(child) in (list, tuple):
+                        self.log('\t'*indent + f"{key}:\t[{', '.join(f'{e}' for e in child)}]", quiet=quiet)
+                        # self.log('\t'*indent + f"{key}:\t{child.__class__(map(str, child))}", quiet=quiet)
                     else:
                         self.log('\t'*indent + f"{key}:\t{child}", quiet=quiet)
 
@@ -74,6 +79,7 @@ class Logger(metaclass=Singleton):
             pass
 
         self.file.close()
+
 
 logger = Logger()
 log = logger.log

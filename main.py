@@ -1,27 +1,32 @@
+import ast
 import sys
 import argparse
+import re
 
-from compute_structures import StatType
+from pydantic.utils import deep_update
+
+from compute_structures import StatType, PruneStrat
 from settings import settings
 
 class EnumAction(argparse.Action):
-    def __init__(self, enum, option_strings, dest, nargs=None, **kwargs):
-        if nargs is not None:
-            raise ValueError("nargs not allowed")
-        
-        super().__init__(option_strings, dest, **kwargs)
+    def __init__(self, enum, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.enum = enum
 
-    def __call__(self, _parser, namespace, value, _option_string=None):
-        setattr(namespace, self.dest, self.enum[value])
+    def __call__(self, _parser, namespace, values, _option_string=None):
+        if type(values) == list:
+            setattr(namespace, self.dest, [self.enum[val] for val in values])
+        else:
+            val = values
+            setattr(namespace, self.dest, self.enum[val])
 
     @staticmethod
     def create(enum):
         return lambda *a, **k: EnumAction(enum, *a, **k)
 
 
-def update_settings(args: argparse.Namespace):
-    for path, value in vars(args).items():
+def update_settings(namespace: argparse.Namespace):
+    for path, value in vars(namespace).items():
         if value is not None:
             keys = path.split(".")
 
@@ -41,6 +46,7 @@ if __name__ == '__main__':
     parser.add_argument("-q", "--quiet", dest="logger.quiet", action="store_true", help="toggle printing to stdout")
     parser.add_argument("-n", "--new", dest="stats.force_new", action="store_true", help="Force creation of fresh statistics")
     parser.add_argument("-s", "--stat_type", dest="stats.stat_type", choices=(StatType._member_names_), action=EnumAction.create(StatType))
+    parser.add_argument("-p", "--prune_strats", dest="stats.prune_strats", choices=(PruneStrat._member_names_), nargs="*", action=EnumAction.create(PruneStrat))
     
     args = parser.parse_args()    
     update_settings(args)
