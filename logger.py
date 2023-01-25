@@ -1,5 +1,6 @@
 import inspect
 import time
+import types
 import weakref
 import signal 
 import os
@@ -19,10 +20,9 @@ class Singleton(type):
 
 class Logger(metaclass=Singleton):
     silenced = settings.logger.quiet
-    n_logs_to_keep = 5
+    n_logs_to_keep = 10
 
     def __init__(self) -> None:
-
         # Create lig file, failing if the file already exists
         log_file_path = f"{settings.logger.out_dir}/{time.time_ns()}.log"
         open(log_file_path, mode="x") 
@@ -38,6 +38,8 @@ class Logger(metaclass=Singleton):
             for f in files[:-self.n_logs_to_keep]:
                 os.remove(f)
 
+        self.log_settings()
+
     def log(self, *args, quiet=False, **kwargs):
         if not self.silenced and not quiet:
             print(*args, **kwargs)
@@ -49,6 +51,22 @@ class Logger(metaclass=Singleton):
 
         print(*args, **kwargs, file=self.file)
 
+    def log_settings(self, quiet=True):
+        def rec_log(root, indent):
+            for key, child in root.items():
+                if type(child) == type(root):
+                    self.log('\t'*indent + str(key) + ":", quiet=quiet)
+                    rec_log(child, indent+1)
+                else:
+                    if type(child) == types.MethodType:
+                        self.log('\t'*indent + f"{key}:\t<bound method {child.__name__}>", quiet=quiet)
+                    else:
+                        self.log('\t'*indent + f"{key}:\t{child}", quiet=quiet)
+
+        self.log("\nPROGRAM SETTINGS:", quiet=quiet)
+        rec_log(settings, 0)
+        self.log(quiet=quiet)
+
     def cleanup(self):
         try:
             self.file.flush()
@@ -57,10 +75,8 @@ class Logger(metaclass=Singleton):
 
         self.file.close()
 
-
-log = Logger().log
-assert Logger() is Logger()
-
+logger = Logger()
+log = logger.log
 
 # Stop logger printing stuff after keyboard interrupt
 _original_sigint_handler = signal.getsignal(signal.SIGINT)
@@ -68,3 +84,6 @@ def sigint_handler(signal, frame):
     Logger().silenced = True
     _original_sigint_handler(signal, frame)
 signal.signal(signal.SIGINT, sigint_handler)
+
+if __name__ == '__main__':
+    assert Logger() is Logger()  # Assert that the singleton metaclass works as expected

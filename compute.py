@@ -26,6 +26,8 @@ SAMPLING_RATIO = 0
     # Problem: {"a": {"a": []}} and {"a_dict.a": []} gives "a_dict.a_list" = 2
     # Maybe dashes can be a good idea to use, in addition to dots. Because they will be interpreted as minus signs they shouldn't be used as member names
 # TODO: Instead of parsing json files. Parse MySQL's json binary format
+# TODO: Make sure histograms work and are created for boolean values!
+# TODO: Add "singleton" histograms? (Eq-width are not terrible where singleton would be good -- they just take a bit more space)
 
 # ==========================================================================================
 # ==================================================
@@ -45,6 +47,8 @@ SAMPLING_RATIO = 0
     Problem: using sampling, we can't really know if all values associated with a key are ints. 
 * Q: Do we track min and max values for strings? Less useful than for numbers, and more expensive to calculate (and possibly store)
     I say no, for now.
+* Q: Do we add support for date strings? In some ways, it should be simpler to support than regular stringss,
+    but it is not required and the JSON RFC makes no mention of date strings
 """
 # ==========================================================================================
 
@@ -181,7 +185,11 @@ def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, c
 
         match STATS_TYPE:
             case StatType.BASIC:
+                # TODO: Can we estimate something here? 
+                # For integers, data.valid_count / (data.max_val - data.min_val)
+                    # Obviously this won't work for floats (as there are infinitely many values between whatever max and min are -- unless they are equal, of course)
                 return None
+                # assert False, "cannot estimate EQ for 
             case StatType.BASIC_NDV | StatType.HYPERLOG:
                 return data.valid_count//data.ndv
 
@@ -276,11 +284,13 @@ def make_base_statistics(collection):
     """
 
     def make_key_path(_parent_path, key, val)-> tuple[str, str]:
+        """returns key path with and without the value type suffix, respectively"""
         type_str = {
             list: "array",
             dict: "object",
             None.__class__: "",
-            # int: "number", float: "number"
+            # bool: "boolean",
+            int: "number", float: "number"
         }.get(type(val), type(val).__name__)
 
         parent_path = _parent_path + (_parent_path and ".")
@@ -427,7 +437,7 @@ def make_base_statistics(collection):
 # Removes uncommon paths. Returns some summary statistics as well
 def make_statistics(collection) -> list[dict, dict]:
     # Tunable vars:
-    MIN_FREQ_THRESHOLD = 0.00
+    MIN_FREQ_THRESHOLD = 0.01
     # MAX_NUM_PATHS_TRACKED
     # MAX_PATH_DEPTH (seems terrible, but eh)
     # Max Prefix length, Max postfix length (prune middle keys)
@@ -503,11 +513,11 @@ def run():
 
 
     # "entities_object.hashtags_array.0_object.indices_array.0_int"
-    stat_path = "entities_object.hashtags_array.0_object.indices_array.0_int"
-    key_path = ["entities", "hashtags", 0, "indices", 0]
-    compare_lt_estimate(data_path, key_path, stats[0], stat_path, 70)
-    compare_eq_estimate(data_path, key_path, stats[0], stat_path, 100)
-    compare_range_estimate(data_path, key_path, stats[0], stat_path, range(-1, 70))
+    # stat_path = "entities_object.hashtags_array.0_object.indices_array.0_int"
+    # key_path = ["entities", "hashtags", 0, "indices", 0]
+    # compare_lt_estimate(data_path, key_path, stats[0], stat_path, 70)
+    # compare_eq_estimate(data_path, key_path, stats[0], stat_path, 100)
+    # compare_range_estimate(data_path, key_path, stats[0], stat_path, range(-1, 70))
 
     # log(compute_cardinality(data_path, lambda d: d["entities"]["urls"][0]["url"]))
     # log(get_stats_data(out_path, lambda d: d["entities_object.urls_array.0_object.url_str"])["count"])
