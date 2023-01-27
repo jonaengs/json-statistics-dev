@@ -8,15 +8,17 @@ from compute_structures import PruneStrat, StatType
 # munchify converts the dictionary to an object, similar to in Javascript. Allows dot notation for member accesss
 settings = munchify({
     "logger": {
-        "quiet": False,
+        "store_output": True,  # redirect output to devnull, so that nothing is stored
+        "silenced": False,
         "out_dir": "logs/",
     },
     "stats": {
         "stat_type": StatType.HISTOGRAM,
-        "hyperloglog_error": 0.05,
-        "filename": "mini",
-
         "force_new": False,
+        "sampling_rate": 0.0,
+        "hyperloglog_error": 0.05,
+
+        "filename": "mini",
         "data_dir": "data/recsys/",
         "out_dir": "stats/",
 
@@ -35,20 +37,6 @@ settings = munchify({
                 "threshold": 3
             },
         },
-        # "prune_params": [
-        #     {
-        #         "strat": PruneStrat.MIN_FREQ,
-        #         "threshold": 0.01
-        #     },
-        #     {
-        #         "strat": PruneStrat.MAX_NO_PATHS,
-        #         "threshold": 100
-        #     },
-        #     {
-        #         "strat": PruneStrat.PRUNE_PREFIX,
-        #         "threshold": 3
-        #     },
-        # ],
     },
     "tracking": {
         "print_tracking": False,

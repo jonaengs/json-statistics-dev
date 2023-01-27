@@ -1,14 +1,16 @@
 import inspect
+import shutil
+import sys
 import time
 import types
 import weakref
 import signal 
 import os
+from datetime import datetime as dt
 
 from munch import Munch
 
 from settings import settings
-
 
 # Taken from: https://stackoverflow.com/a/31270973/8132000
 class Singleton(type):
@@ -21,24 +23,44 @@ class Singleton(type):
 
 
 class Logger(metaclass=Singleton):
-    silenced = settings.logger.quiet
-    n_logs_to_keep = 10
+    silenced = settings.logger.silenced
+    n_logs_to_keep = 5
 
     def __init__(self) -> None:
         # Create lig file, failing if the file already exists
-        log_file_path = f"{settings.logger.out_dir}/{time.time_ns()}.log"
-        open(log_file_path, mode="x") 
-        self.file = open(log_file_path, mode="w")
+        if settings.logger.store_output:
+            # file_name = f"{sys.argv[0][:-3]}_{dt.now().strftime('%H.%M.%S')}.log"
+            # file_name = f"{dt.now().strftime('%H.%M.%S')}_{sys.argv[0][:-3]}.log"
+            # file_name = f"{sys.argv[0][:-3]}_{time.time_ns()}.log"
+            file_name = f"{str(time.time_ns())[5:-3]}_{sys.argv[0][:-3]}.log"
+            log_file_path = os.path.join(settings.logger.out_dir, file_name)
+            open(log_file_path, mode="x")
+            self.file = open(log_file_path, mode="w")
+        else:
+            self.file = open(os.devnull, "w")
 
         # Register cleanup function to be called when this is destroyed
         weakref.finalize(self, self.cleanup)
 
-        # Remove old log files
-        files = list(map(lambda f: os.path.join(settings.logger.out_dir, f), os.listdir(settings.logger.out_dir)))
+        # Move old log files to a subdirectory
+        old_logs_path = os.path.join(settings.logger.out_dir, "old/")
+        if not os.path.exists(old_logs_path):
+            os.makedirs(old_logs_path)
+
+        # files = [
+        #     p
+        #     for f in os.listdir(settings.logger.out_dir)
+        #     if os.path.isfile(p := os.path.join(settings.logger.out_dir, f))
+        # ]
+        files = list(
+           filter(os.path.isfile,
+              map(lambda f: os.path.join(settings.logger.out_dir, f), os.listdir(settings.logger.out_dir))
+        ))
         if len(files) > self.n_logs_to_keep:
+            # Sort files in ascending order, meaning from oldest to most recent
             files.sort(key=lambda p: os.path.getmtime(p))
-            for f in files[:-self.n_logs_to_keep]:
-                os.remove(f)
+            for f in files[:-(self.n_logs_to_keep+1)]:
+                shutil.move(f, os.path.join(old_logs_path, os.path.basename(f)))
 
         self.log_settings()
 
@@ -68,9 +90,13 @@ class Logger(metaclass=Singleton):
                     else:
                         self.log('\t'*indent + f"{key}:\t{child}", quiet=quiet)
 
-        self.log("\nPROGRAM SETTINGS:", quiet=quiet)
-        rec_log(settings, 0)
-        self.log(quiet=quiet)
+        with self.block_log(quiet=quiet) as block:
+            block.small_header("PROGRAM SETTINGS:")
+            rec_log(settings, 0)
+
+
+        # self.log("\nPROGRAM SETTINGS:", quiet=quiet)
+        # self.log(quiet=quiet)
 
     def cleanup(self):
         try:
@@ -79,6 +105,26 @@ class Logger(metaclass=Singleton):
             pass
 
         self.file.close()
+
+    def block_log(self, quiet=False):
+        log = lambda *a, **k: self.log(*a, **k, quiet=quiet)
+        class T:
+            def __enter__(self):
+                return self
+                
+            def __exit__(self, *args):
+                log()
+
+            def big_header(self, header):
+                log(f"\n{'='*20}\n{header}\n{'='*20}")
+
+            def small_header(self, header):
+                log(f"\n{header}")
+
+            def log(*args, **kwargs):
+                return log(*args, **kwargs)
+
+        return T()
 
 
 logger = Logger()

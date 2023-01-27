@@ -18,7 +18,7 @@ from logger import log
 
 STATS_TYPE = settings.stats.stat_type
 HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
-SAMPLING_RATIO = 0
+SAMPLING_RATE = settings.stats.sampling_rate
 
 
 # TODO: Check that the case of repeat keys ({a: 1, a: 2}) is covered. Should be fine as long a json library is used
@@ -26,8 +26,10 @@ SAMPLING_RATIO = 0
     # Problem: {"a": {"a": []}} and {"a_dict.a": []} gives "a_dict.a_list" = 2
     # Maybe dashes can be a good idea to use, in addition to dots. Because they will be interpreted as minus signs they shouldn't be used as member names
 # TODO: Instead of parsing json files. Parse MySQL's json binary format
-# TODO: Make sure histograms work and are created for boolean values!
 # TODO: Add "singleton" histograms? (Eq-width are not terrible where singleton would be good -- they just take a bit more space)
+
+# TODO: Make sure histograms work and are created for boolean values!
+# TODO: Change from using cardinality to selectivity, accounting for sampling. 
 
 # ==========================================================================================
 # ==================================================
@@ -276,7 +278,8 @@ def make_key_path(_parent_path, key, val)-> tuple[str, str]:
         dict: "object",
         None.__class__: "",
         # bool: "boolean",
-        int: "number", float: "number"
+        # str: "string",
+        int: "number", float: "number",
     }.get(type(val), type(val).__name__)
 
     parent_path = _parent_path + (_parent_path and ".")
@@ -286,7 +289,7 @@ def make_key_path(_parent_path, key, val)-> tuple[str, str]:
 
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def make_base_statistics(collection):
+def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat]:
     """
     STATS TYPES:
     1. count, null_count. For int & float: min and max. 
@@ -389,7 +392,7 @@ def make_base_statistics(collection):
     for doc in collection:
         # TODO: Should maybe be done in blocks of N docs at a time, to emulate page sampling as used in real systems
         # TODO: Is python's random faulty in any way? It should be fine for this purpose, right?
-        if (random.random() > SAMPLING_RATIO):
+        if (random.random() > SAMPLING_RATE):
             traverse(doc)
     
     global_mem_tracker.record_global_memory()
@@ -436,7 +439,7 @@ def make_base_statistics(collection):
 
 
 # Removes uncommon paths. Returns some summary statistics as well
-def make_statistics(collection) -> list[dict, dict]:
+def make_statistics(collection, STATS_TYPE=STATS_TYPE) -> list[dict, dict]:
     # Tunable vars:
     MIN_FREQ_THRESHOLD = settings.stats.prune_params[PruneStrat.MIN_FREQ].threshold
     MAX_NUM_PATHS = settings.stats.prune_params[PruneStrat.MAX_NO_PATHS].threshold
@@ -444,36 +447,36 @@ def make_statistics(collection) -> list[dict, dict]:
     # Max Prefix length, Max postfix length (prune middle keys)
         # Look at what JSON PATH in MySQL allows. Like wildcards
 
-    base_stats = make_base_statistics(collection)
+    base_stats = make_base_statistics(collection, STATS_TYPE=STATS_TYPE)
 
     min_count_threshold = int(MIN_FREQ_THRESHOLD * len(collection))
 
     pruned_path_stats = {}
-    min_count_included = None
 
     if PruneStrat.MIN_FREQ in settings.stats.prune_strats:
         for key_path, path_stats in base_stats.items():
-            if path_stats.count >= min_count_threshold:
-                min_count_included = min(min_count_included or math.inf, path_stats.count)
+            if path_stats.count > min_count_threshold:
                 pruned_path_stats[key_path] = path_stats
     else:
         pruned_path_stats = base_stats
 
+    max_count_excluded = None
     if PruneStrat.MAX_NO_PATHS in settings.stats.prune_strats:
         if len(pruned_path_stats) > MAX_NUM_PATHS:
             sorted_by_count = list(sorted(pruned_path_stats.items(), key=lambda t: t[1].count, reverse=True))
             pruned_path_stats = dict(sorted_by_count[:MAX_NUM_PATHS])
+            max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1]
 
     
     num_pruned = len(base_stats) - len(pruned_path_stats)
     log("num_pruned", num_pruned, f"({len(base_stats)} unique paths total)")
 
+    # TODO: Adjust these to account for sampling
     summary_stats = {
-        "min_count_included": min_count_included,
-        "min_count_threshold": min_count_threshold,
+        "highest_count_skipped": min_count_threshold if max_count_excluded is None else max_count_excluded,
         "collection_size": len(collection),
         "stats_type": STATS_TYPE.name,
-        "sampling_ratio": SAMPLING_RATIO,
+        "sampling_rate": SAMPLING_RATE,
     }
     return [pruned_path_stats, summary_stats]
 
@@ -541,3 +544,20 @@ def run():
     # log(compute_ndv(data_path, lambda d: d["entities"]["hashtags"][0]["text"]))
     # log(get_stats_data(out_path, lambda d: d["entities_object.hashtags_array.0_object.text_str"])["ndv"])
     # log()
+
+if __name__ == '__main__':
+    # TODO: TEST Stat creation
+
+    log.__self__.silenced = True
+    print("compute tests")
+    for st in StatType:
+        STATS_TYPE = st
+        stats_1 = make_base_statistics([
+            {"a": 1},
+            {"a": 1},
+            {"a": None},
+        ])
+
+        assert stats_1["a"].count == 3
+        assert stats_1["a"].null_count == 1
+        assert stats_1["a"].valid_count == 2

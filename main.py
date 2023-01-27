@@ -42,19 +42,19 @@ if __name__ == '__main__':
     # NOTE: Take care to update settings before importing any other files!
     parser = argparse.ArgumentParser()
     
-    parser.add_argument("stats.filename", nargs="?", default="test", help="name of file to use as data src (training or test)")
-    parser.add_argument("-q", "--quiet", dest="logger.quiet", action="store_true", help="toggle printing to stdout")
+    parser.add_argument("stats.filename", nargs="?", help="name of file to use as data src (training or test)")
+    parser.add_argument("-q", "--quiet", dest="logger.silenced", action="store_true", help="stop logger printing to stdout")
     parser.add_argument("-n", "--new", dest="stats.force_new", action="store_true", help="Force creation of fresh statistics")
     parser.add_argument("-s", "--stat_type", dest="stats.stat_type", choices=(StatType._member_names_), action=EnumAction.create(StatType))
     parser.add_argument("-p", "--prune_strats", dest="stats.prune_strats", choices=(PruneStrat._member_names_), nargs="*", action=EnumAction.create(PruneStrat))
     
     args = parser.parse_args()    
     update_settings(args)
-
-
+    
+    settings.logger.store_output = True
     import logger
     logger.log(" ".join(sys.argv), quiet=True)
     logger.log(args, quiet=True)
 
-    import compute
-    compute.run()
+    import compute_stats
+    compute_stats.run()
