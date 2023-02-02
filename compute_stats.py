@@ -1,6 +1,5 @@
-from dataclasses import dataclass, asdict
 import json
-from collections import defaultdict, namedtuple
+from collections import Counter, defaultdict, namedtuple
 import math
 import os
 import random
@@ -51,6 +50,15 @@ SAMPLING_RATE = settings.stats.sampling_rate
     I say no, for now.
 * Q: Do we add support for date strings? In some ways, it should be simpler to support than regular stringss,
     but it is not required and the JSON RFC makes no mention of date strings
+
+* Q: With numeric histograms, should we be smart when deciding whether to create a singleton histogram vs an 
+    equi-height histogram? For example, if we encounter each value only once, it's quite unlikely 
+    that all of the values would fit in a singleton histogram (assuming we're sampling heavily). In this case,
+    using an equi-width histogram might be better as it likely represents the data better. On the other hand,
+    if we encounter a low number of different values very many times, then its much more likely that
+    all the values (again, assuming sampling) would fit inside a singleton histogram. 
+    I'm sure there has to be some literature on this topic. Look it up!
+
 """
 # ==========================================================================================
 
@@ -241,11 +249,19 @@ def compute_ndv(path, accessor):
 # Bucket structure is as follows: [upper_bound, count, ndv]. Upper bound is inclusive
 # Very naive algorithm. See MySQL src (sql/histograms/equi_height.cc) for a better approach
 # Note: Mutates the argument array
+# TODO: Figure out if singleton histograms should be sorted or not. I would think yes, as that would allow us
+#   to enable us to binary search large histograms.
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr, nbins=200):
+def compute_histogram(arr, nbins=10):
+
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
+
+    # Try to create singleton-ish histogram if possible
+    # Make sure to check after sorting the array to get a sorted histogram
+    if len(set(arr)) <= nbins:
+        return [HistBucket(v, c, 1) for v,c in Counter(arr).items()]
 
     histogram = []
     counter = 1
@@ -561,3 +577,32 @@ if __name__ == '__main__':
         assert stats_1["a"].count == 3
         assert stats_1["a"].null_count == 1
         assert stats_1["a"].valid_count == 2
+
+    
+    test_hist = compute_histogram(
+         ([0]*20)\
+        +([1]*10)\
+        +([2]*4)\
+        +([5]*15)\
+
+        +([7]*30)\
+        +([8]*1)\
+        +([9]*10)\
+
+        +([10]*10)\
+        +([15]*20),
+        nbins=3
+    )
+
+    assert test_hist == [
+        (5, 49, 4),
+        (9, 41, 3),
+        (15, 30, 2)
+    ]
+
+    bool_hist_1 = compute_histogram(([False]*5) + ([True]*40), nbins=2)
+    bool_hist_2 = compute_histogram(([True]*40) + ([False]*5))
+    assert bool_hist_1 == [(False, 5, 1), (True, 40, 1)] == bool_hist_2, (bool_hist_1, bool_hist_2)
+
+    str_hist = compute_histogram(list("aaabaaadaaabaaadx"), nbins=len("abdx"))
+    assert str_hist == [("a", 12, 1), ("b", 2, 1), ("d", 2, 1), ("x", 1, 1)], str_hist

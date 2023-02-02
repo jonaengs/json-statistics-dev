@@ -15,6 +15,7 @@ class PruneStrat(Enum):
     MAX_NO_PATHS = 2
     MAX_PREFIX_LENGTH = 3
 
+HistBucket = namedtuple("HistBucket", ["upper_bound", "count", "ndv"])
 
 @dataclass
 class KeyStat:
@@ -23,7 +24,7 @@ class KeyStat:
     min_val: (None | int) = None
     max_val: (None | int) = None
     ndv: (None | int) = None
-    histogram: (None | list[int]) = None
+    histogram: (None | list[HistBucket]) = None
 
     def __repr__(self) -> str:
         return str({k:v for k, v in asdict(self).items() if v is not None})
@@ -39,4 +40,3 @@ class KeyStatEncoder(json.JSONEncoder):
             return {k:v for k, v in asdict(o).items() if v is not None}  # exclude None-valued fields
         return super().default(o)   
 
-HistBucket = namedtuple("HistBucket", ["upper_bound", "count", "ndv"])

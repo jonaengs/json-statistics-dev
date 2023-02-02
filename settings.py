@@ -4,6 +4,7 @@ import inspect
 from munch import Munch, munchify
 
 from compute_structures import PruneStrat, StatType
+from utils import deep_dict_update
 
 # munchify converts the dictionary to an object, similar to in Javascript. Allows dot notation for member accesss
 settings = munchify({
@@ -47,8 +48,10 @@ settings = munchify({
     }
 })
 
+def update_settings(data: dict) -> None:
+    deep_dict_update(settings, data, modification_only=True)
 
-def make_property(obj, attr):
+def _make_property(obj, attr):
     """ Makes the given attribute a property of the object, as if the property decorator had been applied to it """
     # For a more general solution that works for object that don't support the dictionart lookup syntax,
     #   change obj[attr] to getattr(obj, attr)
@@ -56,17 +59,17 @@ def make_property(obj, attr):
     setattr(obj.__class__, attr, obj[attr])
     setattr(obj.__class__, attr, property(obj[attr]))
 
-def auto_make_properties(parent):
+def _auto_make_properties(parent):
     """ Traverse the Munch object. Transform callables with a self argument into properties """
     for key, child in parent.items():
         if type(child) == Munch:
-            auto_make_properties(child)
+            _auto_make_properties(child)
         elif callable(child) and inspect.getfullargspec(child)[0][0] == 'self':
-            make_property(parent, key)
+            _make_property(parent, key)
 
-# make_property(settings.stats, "out_path")
-# make_property(settings.stats, "data_path")
-auto_make_properties(settings)
+# _make_property(settings.stats, "out_path")
+# _make_property(settings.stats, "data_path")
+_auto_make_properties(settings)
 
 if __name__ == '__main__':
     assert settings.stats.out_path == (os.path.join(settings.stats.out_dir, settings.stats.filename) + ".json")

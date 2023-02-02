@@ -1,40 +1,15 @@
 from typing import Callable
-import psutil
-import tracemalloc
-import time
-from collections import defaultdict, namedtuple
-import inspect
-
-from settings import settings
-import logger
-
-log = lambda *args, **kwargs: logger.log(*args, **kwargs, quiet=not settings.tracking.print_tracking)
-
-def print_total_memory_use():
-    info = psutil.Process().memory_info()
-    # log("RSS:", info.rss//(1024**2), info.rss//1024, info.rss)
-    # log("VMS:", info.vms//(1024**2), info.vms//1024, info.vms)
-
-    caller_frame = inspect.currentframe().f_back
-    file_path, file_line, *_ = inspect.getframeinfo(caller_frame)
-    file_name = file_path.split("\\")[-1]
-    log(f"{file_name}:{file_line} RSS used: {info.rss/(1024**2):.1f} MB")
 
 
-def print_peak_memory(f):
-    def wrapper(*args, **kwargs):
-        if not tracemalloc.is_tracing():
-            tracemalloc.start()
-        tracemalloc.reset_peak()
-
-        result = f(*args, **kwargs)
-        
-        _size, peak = tracemalloc.get_traced_memory()
-        log(f"{f.__name__} peak memory use: {peak/(1024**2):.1f} MB")
-
-        return result
-
-    return wrapper
+def deep_dict_update(target: dict, data: dict, modification_only=True) -> None:
+    """Recursively update the target dict using the data dict"""
+    for k in data:
+        if k not in target and modification_only:
+            raise ValueError(f"data key {k} not present in target dict. data dict must be a subset of target dict")
+        elif isinstance(target[k], dict) and isinstance(data[k], dict):  # Use isinstance to be compatible with Munch objects (which subclass dict)
+            deep_dict_update(target[k], data[k])
+        else:
+            target[k] = data[k]
 
 
 def get_time_formatter(t) -> Callable[[int|float], str]:
@@ -48,22 +23,46 @@ def get_time_formatter(t) -> Callable[[int|float], str]:
     return lambda _t : f"{_t//(1000**i):.0f}{sizes[i]}"
 
 
-def print_time_used(f):
-    def wrapper(*args, **kwargs):
-        t0_system = time.perf_counter_ns()
-        t0_program = time.process_time_ns()
+if __name__ == '__main__':
+    target_dict = {
+        1: {
+            1: "abc",
+            2: []
+        },
+        2: [1, 2, 3],
+        3: 3,
+        4: {
+            1: {1: "abc"},
+            2: {1: "abc"},
+        }
+    }
 
-        result = f(*args, **kwargs)
-        
-        t1_system = time.perf_counter_ns()
-        t1_program = time.process_time_ns()
-       
-        # Divide by 1M to get ms time 
-        delta_system = (t1_system - t0_system) / 1_000_000
-        delta_program = (t1_program - t0_program) / 1_000_000
+    update_dict = {
+        1: {
+            2: "abc"
+        },
+        2: [1, 2],
+        4: {
+            2: {1: "updated!"}
+        }
+    }
 
-        log(f"{f.__name__} time spent: {delta_system:.1f} ms, {delta_program:.1f} ms")
+    result_dict = {
+        1: {
+            1: "abc",
+            2: "abc"
+        },
+        2: [1, 2],
+        3: 3,
+        4: {
+            1: {1: "abc"},
+            2: {1: "updated!"},
+        }
+    }
 
-        return result
+    assert target_dict != result_dict
+    deep_dict_update(target_dict, update_dict)
+    assert target_dict == result_dict
 
-    return wrapper
+
+    print("utils tests passed!")

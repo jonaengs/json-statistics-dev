@@ -1,9 +1,5 @@
-import ast
 import sys
 import argparse
-import re
-
-from pydantic.utils import deep_update
 
 from compute_structures import StatType, PruneStrat
 from settings import settings

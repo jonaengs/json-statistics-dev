@@ -9,7 +9,9 @@
 - [ ] Make something that can use statistics with (suffix/prefix)-pruned key paths
 
 ## STATS
-- [ ] Find some way to test for "key-path type confusion"
+- [x] Find some way to test for "key-path type confusion"
+- [ ] Explicitly differentiate between equi-width and singleton histograms. Update code to reflect this
+- [ ] Check assumptions around sampling and what we can say about min, max, ndv and histogram stats and how we use them in estimation
 
 ## ANALYSIS
 - [x] Find all key-paths, both typed and untyped
@@ -21,8 +23,9 @@
 - [ ] Visualize the results
 - [ ] Analyze the result
 
-
 ## TESTING
 Write tests for all important logic (wasting time on erroneous results sucks)
-- [ ] a
-- [ ] b
+- [x] Test all estimates with basic stats
+- [x] Test all estimates with basic_ndv stats
+- [x] Test all estimates with hyperloglog stats
+- [ ] Test all estimates with histogram stats
