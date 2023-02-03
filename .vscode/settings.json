@@ -3,4 +3,10 @@
         "**/__pycache__": true,
         "**/venv": true
     },
+    "search.exclude": {
+        "**/data": true,
+        "**/stats": true,
+        "**/logs": true,
+        "**/.vscode": true,
+    }
 } 

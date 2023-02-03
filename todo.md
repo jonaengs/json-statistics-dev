@@ -12,6 +12,7 @@
 - [x] Find some way to test for "key-path type confusion"
 - [ ] Explicitly differentiate between equi-width and singleton histograms. Update code to reflect this
 - [ ] Check assumptions around sampling and what we can say about min, max, ndv and histogram stats and how we use them in estimation
+- [ ] Pickle and store stats of all four stat types in files. When a stat is requested, read that file instead of calculating the statistics again (if all the metadata [type, sample_rate, prune stats] matches).
 
 ## ANALYSIS
 - [x] Find all key-paths, both typed and untyped

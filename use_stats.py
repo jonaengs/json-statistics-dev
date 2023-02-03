@@ -1,13 +1,17 @@
-from collections import namedtuple
 import math
-from compute_stats import make_statistics
+from compute_stats import get_statistics
 
 from compute_structures import HistBucket, KeyStat, StatType
 
 from settings import settings
 
+"""
+Contains functions for estimating cardinalities based on gathered statistics.
+Before using, compute_and_set_stats (or _update_stats_info) must be called
+so that statistics are collected and can be used by the functions. 
+"""
 
-STATS_TYPE = settings.stats.stat_type
+STATS_TYPE = settings.stats.stats_type
 stats = None
 meta_stats = None
 
@@ -19,9 +23,10 @@ RANGE_MULTIPLIER = 0.3
 IS_NULL_MULTIPLIER = 0.1
 
 
-def compute_stats(data, stype=STATS_TYPE):
-    stats, meta_stats = make_statistics(data, stype)
-    _update_stats_info(stype, stats, meta_stats)
+def compute_and_set_stats():
+    stats, meta_stats = get_statistics()
+    _update_stats_info(settings.stats.stats_type, stats, meta_stats)
+    return stats, meta_stats
 
 def _update_stats_info(_STATS_TYPE=None, _stats=None, _meta_stats=None):
     """Set STATS_TYPE, stats and meta_stats manually. Should only be done for testing."""
@@ -71,7 +76,7 @@ def estimate_is_null_cardinality(stat_path):
 
 
 @_adjust_for_sampling
-def estimate_gt_cardinality(stat_path: str, compare_value):
+def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
     # If statistics are missing for this key-path, stop early
@@ -80,8 +85,8 @@ def estimate_gt_cardinality(stat_path: str, compare_value):
         return est_card * INEQ_MULTIPLIER 
 
     data = stats[stat_path]
-    # Catch trivial case
-    if compare_value >= data.max_val:
+    # max_val not gathered for str and bool types
+    if compare_value >= data.max_val or data.max_val == data.min_val:
         return 0
 
     match STATS_TYPE:
@@ -99,16 +104,19 @@ def estimate_gt_cardinality(stat_path: str, compare_value):
                     estimate += bucket.count
                 elif bucket.upper_bound >= compare_value:
                     bucket_range = bucket.upper_bound - bucket_lower_bound
-                    valid_value_range = bucket.upper_bound - compare_value
-                    overlap = valid_value_range / bucket_range
-                    estimate += bucket.count * overlap
+                    if bucket_range == 0:  # Bucket contains only a single value
+                        estimate += bucket.count * (compare_value == bucket.upper_bound)
+                    else:
+                        valid_value_range = bucket.upper_bound - compare_value
+                        overlap = valid_value_range / bucket_range
+                        estimate += bucket.count * overlap
 
                 bucket_lower_bound = bucket.upper_bound
 
             return estimate
 
 @_adjust_for_sampling
-def estimate_lt_cardinality(stat_path: str, compare_value):
+def estimate_lt_cardinality(stat_path: str, compare_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
     if stat_path not in stats:
@@ -116,7 +124,7 @@ def estimate_lt_cardinality(stat_path: str, compare_value):
         return est_card * INEQ_MULTIPLIER 
 
     data = stats[stat_path]
-    if compare_value <= data.min_val:
+    if compare_value <= data.min_val or data.max_val == data.min_val:
         return 0
 
     match STATS_TYPE:
@@ -138,9 +146,12 @@ def estimate_lt_cardinality(stat_path: str, compare_value):
                     estimate += bucket.count
                 elif bucket.upper_bound >= compare_value:
                     bucket_range = bucket.upper_bound - bucket_lower_bound
-                    valid_value_range = compare_value - bucket_lower_bound
-                    overlap = valid_value_range / bucket_range
-                    estimate += bucket.count * overlap
+                    if bucket_range == 0:  # Bucket contains only a single value
+                        estimate += bucket.count * (compare_value == bucket.upper_bound)
+                    else:
+                        valid_value_range = compare_value - bucket_lower_bound
+                        overlap = valid_value_range / bucket_range
+                        estimate += bucket.count * overlap
                     break
 
                 bucket_lower_bound = bucket.upper_bound
@@ -193,23 +204,28 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
         return est_card * (EQ_MULTIPLIER if type(compare_value) != bool else EQ_BOOL_MULTIPLIER)
 
     data = stats[stat_path]
-    if compare_value > data.max_val or compare_value < data.min_val:
+    # We currently don't track min and max for strings and bools. So we can't check if we're outside the range 
+    # for those values
+    if type(compare_value) not in (str, bool) and (compare_value > data.max_val or compare_value < data.min_val):
         return 0
 
     match STATS_TYPE:
         case StatType.BASIC:
+            # TODO: On EQ float, should we just return 0? 
             return stats[stat_path].valid_count * (EQ_MULTIPLIER if type(compare_value) != bool else EQ_BOOL_MULTIPLIER)
         case StatType.BASIC_NDV | StatType.HYPERLOG:
-            return data.valid_count/data.ndv
+            return data.valid_count/(data.ndv if type(compare_value) != bool else 2)  # No ndv data for bools
 
         case StatType.HISTOGRAM:
-            Bucket = namedtuple("Bucket", ["upper_bound", "count", "ndv"])
-
             # Check for string singleton histograms
             if type(compare_value) == str:
-                return next((b.count for b in data.histogram if b.upper_bound == compare_value), 0)
+                if data.histogram:
+                    return next((b.count for b in data.histogram if b.upper_bound == compare_value), 0)
+                else:
+                    # No histogram data collected. Fall back to ndv
+                    return data.valid_count/data.ndv
 
-            for bucket in map(lambda b: Bucket(*b), data.histogram):
+            for bucket in map(lambda b: HistBucket(*b), data.histogram):
                 if bucket.upper_bound >= compare_value:
                     # Assume uniform distribution, so return count divided by ndv
                     return bucket.count / bucket.ndv

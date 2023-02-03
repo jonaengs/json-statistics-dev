@@ -14,7 +14,7 @@ settings = munchify({
         "out_dir": "logs/",
     },
     "stats": {
-        "stat_type": StatType.HISTOGRAM,
+        "stats_type": StatType.HISTOGRAM,
         "force_new": False,
         "sampling_rate": 0.0,
         "hyperloglog_error": 0.05,
@@ -22,6 +22,7 @@ settings = munchify({
         "filename": "mini",
         "data_dir": "data/recsys/",
         "out_dir": "stats/",
+        "stats_cache_dir": "stats/cache/",
 
         "data_path": lambda self, *_: os.path.join(self.data_dir, self.filename) + ".json",
         "out_path": lambda self, *_: os.path.join(self.out_dir, self.filename) + ".json",

@@ -38,5 +38,8 @@ class KeyStatEncoder(json.JSONEncoder):
     def default(self, o):
         if type(o) == KeyStat:
             return {k:v for k, v in asdict(o).items() if v is not None}  # exclude None-valued fields
+        if isinstance(o, Enum):
+            return o.name
+
         return super().default(o)   
 

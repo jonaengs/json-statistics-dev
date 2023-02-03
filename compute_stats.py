@@ -13,9 +13,12 @@ from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
 from logger import log
 
+import stats_cache
+import data_cache
 
 
-STATS_TYPE = settings.stats.stat_type
+
+STATS_TYPE = settings.stats.stats_type
 HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
 SAMPLING_RATE = settings.stats.sampling_rate
 
@@ -24,11 +27,8 @@ SAMPLING_RATE = settings.stats.sampling_rate
 # TODO: Figure out a key path format that is unlikely to collide with existing keys
     # Problem: {"a": {"a": []}} and {"a_dict.a": []} gives "a_dict.a_list" = 2
     # Maybe dashes can be a good idea to use, in addition to dots. Because they will be interpreted as minus signs they shouldn't be used as member names
-# TODO: Instead of parsing json files. Parse MySQL's json binary format
-# TODO: Add "singleton" histograms? (Eq-width are not terrible where singleton would be good -- they just take a bit more space)
 
-# TODO: Make sure histograms work and are created for boolean values!
-# TODO: Change from using cardinality to selectivity, accounting for sampling. 
+# TODO?: Change from using cardinality to selectivity, accounting for sampling. 
 
 # ==========================================================================================
 # ==================================================
@@ -58,6 +58,7 @@ SAMPLING_RATE = settings.stats.sampling_rate
     if we encounter a low number of different values very many times, then its much more likely that
     all the values (again, assuming sampling) would fit inside a singleton histogram. 
     I'm sure there has to be some literature on this topic. Look it up!
+* Q: Do we keep track of min and max strings? Could be expensive to perform all the comparisons. I guess we should test it
 
 """
 # ==========================================================================================
@@ -68,7 +69,6 @@ SAMPLING_RATE = settings.stats.sampling_rate
 # Compute actual selectivity of some clause, then compare to the estimation
     # First: Compare basics like no. els, no. null, min val, max val
     # Then: Compare for clauses like ... > 3, ... = "asdasd",
-        # TODO:: check clauses which demand a string, a number, an object or an array
     # Final (unrealistic): Compare for clauses like JOIN WHERE A.B = ...
 
 
@@ -195,7 +195,7 @@ def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, c
 
         match STATS_TYPE:
             case StatType.BASIC:
-                # TODO: Can we estimate something here? 
+                # TODO: Can we estimate something here?
                 # For integers, data.valid_count / (data.max_val - data.min_val)
                     # Obviously this won't work for floats (as there are infinitely many values between whatever max and min are -- unless they are equal, of course)
                 return None
@@ -249,12 +249,9 @@ def compute_ndv(path, accessor):
 # Bucket structure is as follows: [upper_bound, count, ndv]. Upper bound is inclusive
 # Very naive algorithm. See MySQL src (sql/histograms/equi_height.cc) for a better approach
 # Note: Mutates the argument array
-# TODO: Figure out if singleton histograms should be sorted or not. I would think yes, as that would allow us
-#   to enable us to binary search large histograms.
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr, nbins=10):
-
+def compute_histogram(arr, nbins=10) -> list[HistBucket] | None:
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
@@ -262,6 +259,9 @@ def compute_histogram(arr, nbins=10):
     # Make sure to check after sorting the array to get a sorted histogram
     if len(set(arr)) <= nbins:
         return [HistBucket(v, c, 1) for v,c in Counter(arr).items()]
+    elif type(arr[0]) == str:
+        # Cannot make non-singleton string histograms
+        return None
 
     histogram = []
     counter = 1
@@ -340,7 +340,7 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
                     stats[base_key_str] = KeyStat()
                 stats[base_key_str].count += val is not None  # Change this if null values get a type suffix
 
-                if type(val) in (int, float, str):
+                if type(val) in (int, float, str, bool):
                     # Store all primitive values
                     if key_str not in stats:
                         stats[key_str] = []
@@ -367,7 +367,10 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
                     if not hasattr(stats[key_str], "hll"):
                         stats[key_str].hll = HyperLogLog(HYPERLOGLOG_ERROR)
                     
-                    hll_val = int.to_bytes(8) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
+                    # hll_val = int.to_bytes(8) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
+                    # For some reason, int.to_bytes() seems to produce values that don't work nicely with hyperloglog
+                    # Resulting in ndv=1 for sets of values with true ndv much(?) higher
+                    hll_val = str(val) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
                     stats[key_str].hll.add(hll_val)
 
                     if type(val) == int or type(val) == float:
@@ -403,10 +406,10 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
                     traverse(val, new_parent_path)
 
 
-    log(f"creating statistics for a collection of {len(collection)} documents...")
+    log(f"creating {STATS_TYPE.name} statistics for a collection of {len(collection)} documents...")
     global_mem_tracker.record_global_memory()
     for doc in collection:
-        # TODO: Should maybe be done in blocks of N docs at a time, to emulate page sampling as used in real systems
+        # TODO?: Should maybe be done in blocks of N docs at a time, to emulate page sampling as used in real systems
         # TODO: Is python's random faulty in any way? It should be fine for this purpose, right?
         if (random.random() > SAMPLING_RATE):
             traverse(doc)
@@ -437,7 +440,7 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
         for key in stats:
             if type(stats[key]) == list:
                 vals = stats[key]
-                histogram = compute_histogram(vals) if type(stats[key][0]) != str else None  # drop string histograms for now
+                histogram = compute_histogram(vals)
                 stats[key] = KeyStat(  # obvious performance improvement: Calculate these in a single pass instead of four
                     count=len(vals),
                     null_count=0,
@@ -455,7 +458,9 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
 
 
 # Removes uncommon paths. Returns some summary statistics as well
-def make_statistics(collection, STATS_TYPE=STATS_TYPE) -> list[dict, dict]:
+def make_statistics(collection) -> list[dict, dict]:
+    STATS_TYPE = settings.stats.stats_type
+
     # Tunable vars:
     MIN_FREQ_THRESHOLD = settings.stats.prune_params[PruneStrat.MIN_FREQ].threshold
     MAX_NUM_PATHS = settings.stats.prune_params[PruneStrat.MAX_NO_PATHS].threshold
@@ -470,6 +475,7 @@ def make_statistics(collection, STATS_TYPE=STATS_TYPE) -> list[dict, dict]:
     pruned_path_stats = {}
 
     if PruneStrat.MIN_FREQ in settings.stats.prune_strats:
+        log("Performing min_freq pruning...")
         for key_path, path_stats in base_stats.items():
             if path_stats.count > min_count_threshold:
                 pruned_path_stats[key_path] = path_stats
@@ -479,6 +485,7 @@ def make_statistics(collection, STATS_TYPE=STATS_TYPE) -> list[dict, dict]:
     max_count_excluded = None
     if PruneStrat.MAX_NO_PATHS in settings.stats.prune_strats:
         if len(pruned_path_stats) > MAX_NUM_PATHS:
+            log("Performing max_no_paths pruning...")
             sorted_by_count = list(sorted(pruned_path_stats.items(), key=lambda t: t[1].count, reverse=True))
             pruned_path_stats = dict(sorted_by_count[:MAX_NUM_PATHS])
             max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1]
@@ -487,11 +494,10 @@ def make_statistics(collection, STATS_TYPE=STATS_TYPE) -> list[dict, dict]:
     num_pruned = len(base_stats) - len(pruned_path_stats)
     log("num_pruned", num_pruned, f"({len(base_stats)} unique paths total)")
 
-    # TODO: Adjust these to account for sampling
     summary_stats = {
         "highest_count_skipped": min_count_threshold if max_count_excluded is None else max_count_excluded,
         "collection_size": len(collection),
-        "stats_type": STATS_TYPE.name,
+        "stats_type": STATS_TYPE,
         "sampling_rate": SAMPLING_RATE,
     }
     return [pruned_path_stats, summary_stats]
@@ -507,14 +513,24 @@ def get_stats_data(path, accessor):
     except:
         return {"count": summary_stats["min_count_threshold"]}
 
+@time_tracker.record_time_used
+def get_statistics():
+    if settings.stats.force_new or not stats_cache.check_cached_stats_exists():
+        log("Creating fresh statistics...")
+        collection = data_cache.load_data()
+        stats = make_statistics(collection)
+        stats_cache.add_stats(stats)
+    else:
+        log("Retrieving cached statistics...")
+        stats = stats_cache.get_cached_stats()
+    
+    return stats
 
-def run():
-    log(f"using {StatType(STATS_TYPE).name} StatType")
-
+def get_statistics_old(STATS_TYPE):
     data_path = settings.stats.data_path
     out_path = settings.stats.out_path
 
-    def store_stats():
+    def create_and_store_stats():
         log("Creating new stats...")
         with open(data_path) as f:
             stats = make_statistics(json.load(f))
@@ -532,13 +548,25 @@ def run():
             if existing_stats and existing_stats[1]["stats_type"] == STATS_TYPE.name:
                 stats = existing_stats
                 log("Using pre-existing stats...")
+                
+                # Convert stats back into KeyStat objects
                 for k in stats[0]:
                     stats[0][k] = KeyStat(**stats[0][k])
+                
+                # Convert from enum name to enum object
+                existing_stats[1]["stats_type"] = StatType[existing_stats[1]["stats_type"]]
 
             else:
-                stats = store_stats()
+                stats = create_and_store_stats()
     else:
-        stats = store_stats()
+        stats = create_and_store_stats()
+
+    return stats
+
+def run():
+    log(f"using {StatType(STATS_TYPE).name} StatType")
+    
+    stats = get_statistics_old()
 
 
     # "entities_object.hashtags_array.0_object.indices_array.0_int"
@@ -606,3 +634,36 @@ if __name__ == '__main__':
 
     str_hist = compute_histogram(list("aaabaaadaaabaaadx"), nbins=len("abdx"))
     assert str_hist == [("a", 12, 1), ("b", 2, 1), ("d", 2, 1), ("x", 1, 1)], str_hist
+
+
+    collection = [
+        {
+            "a": True,
+            "b": 1
+        },
+        {
+            "a": False,
+            "b": 1
+        },
+        {
+            "a": None,
+            "b": 1
+        },
+        {
+            "a": None,
+            "b": 1
+        },
+        {
+            "b": 1
+        },
+        {
+            "a": False,
+            "b": 1
+        },
+        {
+            "a": True,
+            "b": 1
+        },
+    ]
+
+    print(make_base_statistics(collection, StatType.HISTOGRAM))

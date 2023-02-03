@@ -10,12 +10,7 @@ from use_stats import _update_stats_info, estimate_eq_cardinality, estimate_exis
 # REPLACE: self.assertEqual($1, $2)
 
 """
-TODO TEST THE FOLLOWING:
-
-* histogram_bool & histogram_str
-    * exists, eq, null
-
-* If we differentiate between float and int: Write tests for ints. Make num tests for floats
+TODO: If we ever differentiate between float and int in statistics: Write tests for ints. Make num tests for floats
 """
 
 class TestBasic(unittest.TestCase):
@@ -23,9 +18,13 @@ class TestBasic(unittest.TestCase):
         _update_stats_info(
             _STATS_TYPE=StatType.BASIC, 
             _stats={
-                "test_number": KeyStat(
+                "test": KeyStat(
                     count=100,
                     null_count=20,
+                ),
+                "test_number": KeyStat(
+                    count=80,
+                    null_count=0,
                     min_val=0,
                     max_val=15
                 )
@@ -38,9 +37,10 @@ class TestBasic(unittest.TestCase):
         )
 
 
-        self.assertEqual(estimate_exists_cardinality("test_number"), 100)
-        self.assertEqual(estimate_is_null_cardinality("test_number"), 20)
-        self.assertEqual(estimate_not_null_cardinality("test_number"), 80)
+        self.assertEqual(estimate_is_null_cardinality("test"), 20)
+        self.assertEqual(estimate_not_null_cardinality("test"), 80)
+        self.assertEqual(estimate_exists_cardinality("test"), 100)
+        self.assertEqual(estimate_exists_cardinality("test_number"), 80)
         
         # Outside value range gives 0
         self.assertEqual(estimate_eq_cardinality("test_number", -1), 0)
@@ -79,9 +79,13 @@ class TestBasic(unittest.TestCase):
         # TEST BASIC WITH BOOL
         _update_stats_info(
             _STATS_TYPE=StatType.BASIC, 
-            _stats={"test_bool": KeyStat(
+            _stats={
+                "test": KeyStat(
                     count=100,
                     null_count=20,
+                ),
+                "test_bool": KeyStat(
+                    count=80,
                     min_val=False,
                     max_val=True
                 )
@@ -93,9 +97,10 @@ class TestBasic(unittest.TestCase):
             }
         )
 
-        self.assertEqual(estimate_exists_cardinality("test_bool"), 100)
-        self.assertEqual(estimate_is_null_cardinality("test_bool"), 20)
-        self.assertEqual(estimate_not_null_cardinality("test_bool"), 80)
+        self.assertEqual(estimate_exists_cardinality("test"), 100)
+        self.assertEqual(estimate_is_null_cardinality("test"), 20)
+        self.assertEqual(estimate_not_null_cardinality("test"), 80)
+        self.assertEqual(estimate_exists_cardinality("test_bool"), 80)
         
         self.assertEqual(estimate_eq_cardinality("test_bool", True), 40)
         self.assertEqual(estimate_eq_cardinality("test_bool", False), 40)
@@ -105,9 +110,14 @@ class TestBasic(unittest.TestCase):
         # TEST BASIC WITH BOOL
         _update_stats_info(
             _STATS_TYPE=StatType.BASIC, 
-            _stats={"test_str": KeyStat(
+            _stats={
+                "test": KeyStat(
                     count=100,
                     null_count=20,
+                ),
+                "test_str": KeyStat(
+                    count=80,
+                    null_count=0,
                     min_val="",
                     max_val="https://www.twitter.com/zzzzzzzzzzz"
                 )
@@ -119,9 +129,10 @@ class TestBasic(unittest.TestCase):
             }
         )
 
-        self.assertEqual(estimate_exists_cardinality("test_str"), 100)
-        self.assertEqual(estimate_is_null_cardinality("test_str"), 20)
-        self.assertEqual(estimate_not_null_cardinality("test_str"), 80)
+        self.assertEqual(estimate_exists_cardinality("test"), 100)
+        self.assertEqual(estimate_is_null_cardinality("test"), 20)
+        self.assertEqual(estimate_not_null_cardinality("test"), 80)
+        self.assertEqual(estimate_exists_cardinality("test_str"), 80)
         
         self.assertEqual(estimate_eq_cardinality("test_str", ""), 8)
         self.assertEqual(estimate_eq_cardinality("test_str", "abcabc"), 8)
@@ -131,13 +142,21 @@ class TestBasic(unittest.TestCase):
         _update_stats_info(
             _STATS_TYPE=StatType.BASIC, 
             _stats={
-                "test_obj": KeyStat(
+                "test": KeyStat(
                     count=100,
                     null_count=20,
                 ),
-                "test_obj.test_num": KeyStat(
+                "test_obj": KeyStat(
+                    count=80,
+                    null_count=0,
+                ),
+                "test_obj.test": KeyStat(
                     count=80,
                     null_count=10
+                ),
+                "test_obj.test_num": KeyStat(
+                    count=70,
+                    null_count=0
                 )
             }, 
             _meta_stats={
@@ -146,26 +165,28 @@ class TestBasic(unittest.TestCase):
                 "sampling_rate": 0,
             }
         )
-        self.assertEqual(estimate_exists_cardinality("test_obj"), 100)
-        self.assertEqual(estimate_is_null_cardinality("test_obj"), 20)
-        self.assertEqual(estimate_not_null_cardinality("test_obj"), 80)
+        self.assertEqual(estimate_exists_cardinality("test"), 100)
+        self.assertEqual(estimate_is_null_cardinality("test"), 20)
+        self.assertEqual(estimate_not_null_cardinality("test"), 80)
+        self.assertEqual(estimate_exists_cardinality("test_obj"), 80)
+        self.assertEqual(estimate_exists_cardinality("test_obj.test_num"), 70)
 
         _update_stats_info(
             _stats={
                 "test_arr": KeyStat(
                     count=100,
-                    null_count=20,
+                    null_count=0,
                 ),
                 "test_arr.0_num": KeyStat(
                     count=80,
-                    null_count=10
+                    null_count=0
                 )
             }, 
         )
 
         self.assertEqual(estimate_exists_cardinality("test_arr"), 100)
-        self.assertEqual(estimate_is_null_cardinality("test_arr"), 20)
-        self.assertEqual(estimate_not_null_cardinality("test_arr"), 80)
+        self.assertEqual(estimate_is_null_cardinality("test_arr"), 0)
+        self.assertEqual(estimate_not_null_cardinality("test_arr"), 100)
         
 
 
@@ -228,9 +249,13 @@ class TestBasic(unittest.TestCase):
         _update_stats_info(
             _STATS_TYPE=StatType.BASIC, 
             _stats={
-                "test_number": KeyStat(
+                "test": KeyStat(
                     count=90,
                     null_count=18,
+                ),
+                "test_number": KeyStat(
+                    count=72,
+                    null_count=0,
                     min_val=0,
                     max_val=15
                 )
@@ -242,9 +267,9 @@ class TestBasic(unittest.TestCase):
             }
         )
 
-        self.assertEqual(estimate_exists_cardinality("test_number"), 100)
-        self.assertEqual(estimate_is_null_cardinality("test_number"), 20)
-        self.assertEqual(estimate_not_null_cardinality("test_number"), 80)
+        self.assertEqual(estimate_exists_cardinality("test"), 100)
+        self.assertEqual(estimate_is_null_cardinality("test"), 20)
+        self.assertEqual(estimate_not_null_cardinality("test"), 80)
         
         self.assertEqual(estimate_eq_cardinality("test_number", -1), 0)
         self.assertEqual(estimate_eq_cardinality("test_number", 16), 0)
@@ -272,9 +297,9 @@ class TestBasic(unittest.TestCase):
         self.assertEqual(estimate_range_cardinality("test_number", range(14, 100)), 6)
 
 
-
+# TODO: Update to remove null values from typed key paths, as done in TestBasic
 class TestBasicNDV(unittest.TestCase):
-    STAT_TYPE = StatType.BASIC_NDV
+    STATS_TYPE = StatType.BASIC_NDV
     """
     Same tests with same values as in TestBasic, except for equality estimates,
     which should now be using the NDV statistic.
@@ -282,7 +307,7 @@ class TestBasicNDV(unittest.TestCase):
 
     def test_num_no_sampling(self):
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={
                 "test_number": KeyStat(
                     count=100,
@@ -294,7 +319,7 @@ class TestBasicNDV(unittest.TestCase):
             }, 
             _meta_stats={
                 "highest_count_skipped": 5,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0,
             }
         )
@@ -338,7 +363,7 @@ class TestBasicNDV(unittest.TestCase):
 
     def test_bool_no_sampling(self):
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={"test_bool": KeyStat(
                     count=100,
                     null_count=20,
@@ -349,7 +374,7 @@ class TestBasicNDV(unittest.TestCase):
             }, 
             _meta_stats={
                 "highest_count_skipped": 5,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0,
             }
         )
@@ -365,7 +390,7 @@ class TestBasicNDV(unittest.TestCase):
     def test_str_no_sampling(self):
         # TEST BASIC WITH BOOL
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={"test_str": KeyStat(
                     count=100,
                     null_count=20,
@@ -376,7 +401,7 @@ class TestBasicNDV(unittest.TestCase):
             }, 
             _meta_stats={
                 "highest_count_skipped": 5,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0,
             }
         )
@@ -391,7 +416,7 @@ class TestBasicNDV(unittest.TestCase):
 
     def test_arr_obj_no_sampling(self):
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={
                 "test_obj": KeyStat(
                     count=100,
@@ -404,7 +429,7 @@ class TestBasicNDV(unittest.TestCase):
             }, 
             _meta_stats={
                 "highest_count_skipped": 5,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0,
             }
         )
@@ -433,11 +458,11 @@ class TestBasicNDV(unittest.TestCase):
 
     def test_missing_no_sampling(self):
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={}, 
             _meta_stats={
                 "highest_count_skipped": 20,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0,
             }
         )
@@ -460,11 +485,11 @@ class TestBasicNDV(unittest.TestCase):
 
     def test_missing_with_sampling(self):
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={}, 
             _meta_stats={
                 "highest_count_skipped": 10,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0.5,
             }
         )
@@ -493,7 +518,7 @@ class TestBasicNDV(unittest.TestCase):
         This is unrealistic when large sample rates and diverse values are involved.
         """
         _update_stats_info(
-            _STATS_TYPE=self.STAT_TYPE, 
+            _STATS_TYPE=self.STATS_TYPE, 
             _stats={
                 "test_number": KeyStat(
                     count=90,
@@ -505,7 +530,7 @@ class TestBasicNDV(unittest.TestCase):
             }, 
             _meta_stats={
                 "highest_count_skipped": 4,
-                "stats_type": self.STAT_TYPE,
+                "stats_type": self.STATS_TYPE,
                 "sampling_rate": 0.1,
             }
         )
@@ -545,8 +570,9 @@ class TestHyperLogLog(TestBasicNDV):
     Test that estimation functions behave in the same manner when using hyperloglog as when
     computing ndv by brute force.
     """
-    STAT_TYPE = StatType.HYPERLOG
+    STATS_TYPE = StatType.HYPERLOG
 
+# TODO: Update to remove null values from typed key paths, as done in TestBasic
 class TestHistogram(unittest.TestCase):
     def test_num_no_sampling(self):
         _update_stats_info(

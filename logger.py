@@ -62,6 +62,7 @@ class Logger(metaclass=Singleton):
             for f in files[:-(self.n_logs_to_keep+1)]:
                 shutil.move(f, os.path.join(old_logs_path, os.path.basename(f)))
 
+        self.log(dt.now(), quiet=True)
         self.log_settings()
 
     def log(self, *args, quiet=False, **kwargs):
