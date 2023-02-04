@@ -9,3 +9,6 @@ hyperloglog == 0.0.*  # 0.0.14 used
 
 # Convenience stuff
 Munch == 2.5.*
+
+# For the tests in stats_cache.py
+pyfakefs == 5.1.*

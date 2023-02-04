@@ -5,6 +5,7 @@ from copy import deepcopy
 import os
 import pickle
 import time
+from compute_structures import StatType
 from settings import settings
 
 """
@@ -140,23 +141,32 @@ else:
     # if __name__ == '__main__'
 
     # Setup fake file system so tests don't affect real data
+    cwd = os.getcwd()
+    settings.stats.stats_cache_dir = settings.stats.out_dir + "test_cache/"
+
     from pyfakefs import fake_filesystem
-    os.path.commonpath
     filesystem = fake_filesystem.FakeFilesystem()
+    open = fake_filesystem.FakeFileOpen(filesystem)
     os = fake_filesystem.FakeOsModule(filesystem)
+
+    filesystem.create_dir(cwd)
+    os.chdir(cwd)
+    filesystem.create_dir(settings.stats.stats_cache_dir)
 
     cache_index_fname = "index.pickle"
     cache_index_path = os.path.join(settings.stats.stats_cache_dir, cache_index_fname)
-    print(os.listdir(cache_index_path))
+
 
     # BEGIN TESTS:
     
-    # No cache index should exist on disk yet
+    # No cache index should exist on disk yet. Test stats cache dir should be empty
     assert not os.path.exists(cache_index_path)
+    assert not os.listdir(settings.stats.stats_cache_dir)
 
     _setup()
 
     # No cached stats should exist yet
+    print(len(_cache_index))
     assert check_cached_stats_exists() == False
     try:
         get_cached_stats()
@@ -186,18 +196,29 @@ else:
 
     # _cache_index was updated and stored to disk
     assert len(_cache_index) == 1
-    with open(cache_index_path) as f:
+    with open(cache_index_path, 'rb') as f:
         assert pickle.load(f) == _cache_index
 
     # Settings stored match current settings
+    assert _cache_index[0].stat_settings == _get_identifying_settings()
 
 
     # Changing current settings ensures nothing matches
-
-
+    old_stat_type = settings.stats.stats_type
+    settings.stats.stats_type = StatType((settings.stats.stats_type.value + 1) % len(StatType))
+    assert _cache_index[0].stat_settings != _get_identifying_settings()
+    assert check_cached_stats_exists() == False
+    # Changing back works as expected
+    settings.stats.stats_type = old_stat_type
+    assert _cache_index[0].stat_settings == _get_identifying_settings()
+    assert check_cached_stats_exists() == True
 
     # Writing with same settings does not result in more files
-
+    add_stats(stats)
+    add_stats(stats)
+    add_stats(stats)
+    assert len(_cache_index) == 1
+    assert len(os.listdir(settings.stats.stats_cache_dir)) == 2  # index plus single cached obj
     
 
 
