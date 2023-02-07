@@ -79,7 +79,7 @@ class Logger(metaclass=Singleton):
     def log_settings(self, quiet=True):
         def rec_log(root, indent):
             for key, child in root.items():
-                if type(child) == Munch:
+                if isinstance(child, Munch):
                     self.log('\t'*indent + str(key) + ":", quiet=quiet)
                     rec_log(child, indent+1)
                 else:
