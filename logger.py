@@ -100,12 +100,14 @@ class Logger(metaclass=Singleton):
         # self.log(quiet=quiet)
 
     def cleanup(self):
+        self._flush()
+        self.file.close()
+
+    def _flush(self):
         try:
             self.file.flush()
         except:
             pass
-
-        self.file.close()
 
     def block_log(self, quiet=False):
         log = lambda *a, **k: self.log(*a, **k, quiet=quiet)
@@ -134,7 +136,8 @@ log = logger.log
 # Stop logger printing stuff after keyboard interrupt
 _original_sigint_handler = signal.getsignal(signal.SIGINT)
 def sigint_handler(signal, frame):
-    Logger().silenced = True
+    logger.silenced = True
+    logger._flush()
     _original_sigint_handler(signal, frame)
 signal.signal(signal.SIGINT, sigint_handler)
 

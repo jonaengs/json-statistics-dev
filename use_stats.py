@@ -23,7 +23,7 @@ RANGE_MULTIPLIER = 0.3
 IS_NULL_MULTIPLIER = 0.1
 
 
-def compute_and_set_stats():
+def load_and_apply_stats():
     stats, meta_stats = get_statistics()
     _update_stats_info(settings.stats.stats_type, stats, meta_stats)
     return stats, meta_stats
@@ -229,6 +229,9 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
                 if bucket.upper_bound >= compare_value:
                     # Assume uniform distribution, so return count divided by ndv
                     return bucket.count / bucket.ndv
+
+            # If we went past all buckets and never found anything with our value, estimate is 0
+            return 0
 
 
 

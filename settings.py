@@ -23,6 +23,7 @@ settings = munchify({
         "force_new": False,
         "sampling_rate": 0.0,
         "hyperloglog_error": 0.05,
+        "num_histogram_buckets": 10,
 
         "filename": "mini",
         "data_dir": "data/recsys/",
@@ -34,15 +35,9 @@ settings = munchify({
 
         "prune_strats": [PruneStrat.MIN_FREQ],
         "prune_params": {
-            PruneStrat.MIN_FREQ: {
-                "threshold": 0.01
-            },
-            PruneStrat.MAX_NO_PATHS: {
-                "threshold": 100
-            },
-            PruneStrat.MAX_PREFIX_LENGTH: {
-                "threshold": 3
-            },
+            "min_freq_threshold": 0.01,
+            "max_no_paths_threshold": 100,
+            "max_prefix_length_threshold": 3,
         },
     },
     "tracking": {
@@ -83,23 +78,26 @@ class _LockableMunch(Munch):
     def __setstate__(self, state):
         return super().__setstate__(state)
 
+    def __deepcopy__(self, *args, **kwargs):
+        return Munch(self)
+
 
 def unlock_settings():
     """
     Makes the settings object mutable again.
     Beware: Turns all tuples into lists.
     """
-    global _settings_are_locked
-
     def rec_apply_unlock(parent):
         for key, child in parent.items():
             if isinstance(child, Munch):
                 rec_apply_unlock(child)
             elif type(child) == tuple:
                 parent[key] = list(child)
-
-    rec_apply_unlock(settings)
+    
+    
+    global _settings_are_locked
     _settings_are_locked = False
+    rec_apply_unlock(settings)
     
 
 def lock_settings(err_on_attempt=True):
@@ -107,9 +105,7 @@ def lock_settings(err_on_attempt=True):
     Makes the settings object immutable.
     Beware: turns lists into tuples. 
     TODO? Make a custom immutable list class, overriding (__set, pop, __del, ...)
-    """
-    global _settings_are_locked
-            
+    """            
     def rec_apply_lock(parent):
         for key, child in parent.items():
             if isinstance(child, Munch):
@@ -119,7 +115,7 @@ def lock_settings(err_on_attempt=True):
 
         parent.__class__ = _LockableMunch
 
-
+    global _settings_are_locked
     rec_apply_lock(settings)
     _settings_are_locked = True
     _LockableMunch.err_on_attempt = err_on_attempt

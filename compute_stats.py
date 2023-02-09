@@ -17,12 +17,6 @@ import stats_cache
 import data_cache
 
 
-
-STATS_TYPE = settings.stats.stats_type
-HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
-SAMPLING_RATE = settings.stats.sampling_rate
-
-
 # TODO: Check that the case of repeat keys ({a: 1, a: 2}) is covered. Should be fine as long a json library is used
 # TODO: Figure out a key path format that is unlikely to collide with existing keys
     # Problem: {"a": {"a": []}} and {"a_dict.a": []} gives "a_dict.a_list" = 2
@@ -251,7 +245,8 @@ def compute_ndv(path, accessor):
 # Note: Mutates the argument array
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr, nbins=10) -> list[HistBucket] | None:
+def compute_histogram(arr) -> list[HistBucket] | None:
+    nbins = settings.stats.num_histogram_buckets
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
@@ -305,7 +300,7 @@ def make_key_path(_parent_path, key, val)-> tuple[str, str]:
 
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat]:
+def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> dict[str, KeyStat]:
     """
     STATS TYPES:
     1. count, null_count. For int & float: min and max. 
@@ -316,6 +311,9 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
     4. Histograms. 
         Naive approach, so this will again require us to store all values
     """
+    STATS_TYPE = STATS_TYPE or settings.stats.stats_type
+    SAMPLING_RATE = SAMPLING_RATE or settings.stats.sampling_rate
+    HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
     
     def record_path_stats(stats, parent_path, key, val) -> str:
         match STATS_TYPE:
@@ -460,17 +458,18 @@ def make_base_statistics(collection, STATS_TYPE=STATS_TYPE) -> dict[str, KeyStat
 # Removes uncommon paths. Returns some summary statistics as well
 def make_statistics(collection) -> list[dict, dict]:
     STATS_TYPE = settings.stats.stats_type
+    SAMPLING_RATE = settings.stats.sampling_rate
 
     # Tunable vars:
-    MIN_FREQ_THRESHOLD = settings.stats.prune_params[PruneStrat.MIN_FREQ].threshold
-    MAX_NUM_PATHS = settings.stats.prune_params[PruneStrat.MAX_NO_PATHS].threshold
+    MIN_FREQ_THRESHOLD = settings.stats.prune_params.min_freq_threshold
+    MAX_NUM_PATHS = settings.stats.prune_params.max_no_paths_threshold
     # MAX_PATH_DEPTH (seems terrible, but eh)
     # Max Prefix length, Max postfix length (prune middle keys)
         # Look at what JSON PATH in MySQL allows. Like wildcards
 
-    base_stats = make_base_statistics(collection, STATS_TYPE=STATS_TYPE)
+    base_stats = _make_base_statistics(collection)
 
-    min_count_threshold = int(MIN_FREQ_THRESHOLD * len(collection))
+    min_count_threshold = int(MIN_FREQ_THRESHOLD * len(collection)) * (PruneStrat.MIN_FREQ in settings.stats.prune_strats)
 
     pruned_path_stats = {}
 
@@ -488,7 +487,7 @@ def make_statistics(collection) -> list[dict, dict]:
             log("Performing max_no_paths pruning...")
             sorted_by_count = list(sorted(pruned_path_stats.items(), key=lambda t: t[1].count, reverse=True))
             pruned_path_stats = dict(sorted_by_count[:MAX_NUM_PATHS])
-            max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1]
+            max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1][1].count
 
     
     num_pruned = len(base_stats) - len(pruned_path_stats)
@@ -596,7 +595,7 @@ if __name__ == '__main__':
     print("compute tests")
     for st in StatType:
         STATS_TYPE = st
-        stats_1 = make_base_statistics([
+        stats_1 = _make_base_statistics([
             {"a": 1},
             {"a": 1},
             {"a": None},
@@ -666,4 +665,4 @@ if __name__ == '__main__':
         },
     ]
 
-    print(make_base_statistics(collection, StatType.HISTOGRAM))
+    print(_make_base_statistics(collection, StatType.HISTOGRAM))

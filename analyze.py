@@ -1,17 +1,20 @@
+import itertools
 import json
 import math
 import os
+import pickle
 import random
 from collections import defaultdict, namedtuple
 from typing import Any, Callable
 import typing
 
-from compute_structures import StatType
-from compute_stats import make_base_statistics, make_key_path
-from settings import settings
-from use_stats import compute_and_set_stats, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality
+from compute_structures import KeyStatEncoder, PruneStrat, StatType
+from compute_stats import _make_base_statistics, make_key_path
+from settings import lock_settings, settings, unlock_settings
+from use_stats import load_and_apply_stats, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality
 from logger import log
 import data_cache
+from visualize import plot_errors
 
 Json_Number = int | float
 Json_Null = type(None)
@@ -106,6 +109,17 @@ def run_analysis():
     for doc in collection:
         traverse_and_record(doc)
 
+
+    # We could also simply store values to test against, rather than indexes to those values
+    N_TEST_VALUES = 50
+    # random.seed(1)
+    json_path_to_test_values = {
+        path: [e for e in random.choices(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
+        # path: random.choices(set(arr), k=min(N_TEST_VALUES, len(set(arr))))
+        for path, arr in json_path_values.items()
+    }
+
+    
     # pprint(sorted(json_paths)[:5])
     # pprint(sorted(key_paths)[:5])
 
@@ -113,9 +127,6 @@ def run_analysis():
     # json_path_confusions = {k: count_types(v) for k, v in json_path_values.items()}
     # top_confused_paths = sorted(json_path_confusions.items(), key=lambda t: t[1], reverse=True)[:10]
     # print(top_confused_paths)
-
-    def get_range(arr):
-        return min(arr), max(arr)
 
     #
     # Problem: Currently, we can only generate new values for testing estimates when there's 
@@ -127,9 +138,6 @@ def run_analysis():
 
     # key_path_ranges = {k: (min(vs), max(vs)) for k, vs in key_path_values.items() if not all(v is None for v in vs) }
     
-    # TODO: This won't do if we enable sampling before this point
-    value_gen_stats = make_base_statistics(collection, StatType.BASIC)
-
     get_exists_comparator = lambda *_: (lambda _: 1)
     get_is_null_comparator = lambda *_: (lambda x: x is None)
     get_is_not_null_comparator = lambda *_: (lambda x: x is not None)
@@ -137,28 +145,73 @@ def run_analysis():
     get_lt_comparator = lambda val: (lambda x: type(x) == type(val) and x < val)
     get_gt_comparator = lambda val: (lambda x: type(x) == type(val) and x > val)
 
-    # Data has two columns: ground_truth and estimate
-    exists_data = []
-    is_null_data = []
-    is_not_null_data = []
-    eq_data = []
-    lt_data = []
-    gt_data = []
-
     # TODO: We're currently retrieving (likely) different random values to test against for each stat type.
     # This is obviously bad if we want a valid comparison. 
     # How about pre-computing which indices to sample, or just trying every single value
     
-    log("Gathering data for analysis...")
-    for stats_type in StatType:
-        settings.stats.stats_type = stats_type
-        stats, meta_stats = compute_and_set_stats()
+    settings_to_try = {
+        "stats_type": list(StatType),
+        "prune_strats": [
+            [],
+            [PruneStrat.MIN_FREQ],
+            [PruneStrat.MAX_NO_PATHS],
+            [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
+        ],
+        "num_histogram_buckets": [3, 10, 25, 100],
+        "sampling_rate": [0.0, 0.05, 0.2, 0.5, 0.9],
+    }
+
+    def generate_settings_combinations():
+        all_combinations = itertools.product(*settings_to_try.values())
+        for comb in all_combinations:
+            override_setting = {k: v for k, v in zip(settings_to_try, comb)}
+            
+            # Skip redundant settings
+            # Skip variations on histogram size if histograms arent being created
+            if override_setting["stats_type"] != StatType.HISTOGRAM and override_setting["num_histogram_buckets"] != settings_to_try["num_histogram_buckets"][0]:
+                continue
+
+            yield override_setting
+    
+    def update_settings(new_stats_settings):
+        unlock_settings()
+
+        for k, v in new_stats_settings.items():
+            assert k in settings.stats, f"key {k=} not already present in settings"
+            settings.stats[k] = v
+        
+        lock_settings()
+
+    settings_generator = generate_settings_combinations()
+    
+    log("Beginning analysis...")
+    all_results = []
+    settings_generator = [
+        {'stats_type': StatType.HISTOGRAM, 'prune_strats': [], 'num_histogram_buckets': 3, 'sampling_rate': 0.5}
+    ]
+    for override_settings in settings_generator:
+        log("Using override settings:")
+        log(override_settings)
+        update_settings(override_settings)
+        stats, meta_stats = load_and_apply_stats()
+        log("Using statistics of size:", len(json.dumps([stats, meta_stats], cls=KeyStatEncoder)))
+
+
+        # Data has two columns: ground_truth and estimate
+        exists_data = []
+        is_null_data = []
+        is_not_null_data = []
+        eq_data = []
+        lt_data = []
+        gt_data = []
 
         for json_path in json_paths:
-            test_vals = []
-            for key_path in filter(lambda kp: kp in key_paths, get_possible_key_paths(json_path)):
-                test_vals += generate_test_vals(value_gen_stats[key_path].min_val, value_gen_stats[key_path].max_val)
-                test_vals += random.choices(json_path_values[json_path], k=min(50, len(json_path_values[json_path])))
+            # test_vals = []
+            # for key_path in filter(lambda kp: kp in key_paths, get_possible_key_paths(json_path)):
+            #     test_vals += generate_test_vals(value_gen_stats[key_path].min_val, value_gen_stats[key_path].max_val)
+            #     test_vals += random.choices(json_path_values[json_path], k=min(50, len(json_path_values[json_path])))
+
+            test_vals = json_path_to_test_values[json_path]
             
             # path / exists
             exists_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_exists_comparator())
@@ -223,19 +276,38 @@ def run_analysis():
 
 
         log()
-        log(f"{stats_type.name} error statistics:")
+        log(f"{settings.stats.stats_type.name} error statistics:")
         log("exists data:", end="\t\t")
-        analyze_data(exists_data)
+        exists_results = analyze_data(exists_data)
         log("is_null data:", end="\t\t")
-        analyze_data(is_null_data)
+        is_null_results = analyze_data(is_null_data)
         log("is_not_null data:", end="\t")
-        analyze_data(is_not_null_data)
-        log("eq_data:", end="\t\t")
-        analyze_data(eq_data)
-        log("lt_data:", end="\t\t")
-        analyze_data(lt_data)
-        log("gt_data:", end="\t\t")
-        analyze_data(gt_data)
+        is_not_null_results = analyze_data(is_not_null_data)
+        log("eq data:", end="\t\t")
+        eq_results = analyze_data(eq_data)
+        log("lt data:", end="\t\t")
+        lt_results = analyze_data(lt_data)
+        log("gt data:", end="\t\t")
+        gt_results = analyze_data(gt_data)
+        log("\n")
+
+        error_data = {
+                "exists": exists_results,
+                "is_null": is_null_results,
+                "is_not_null": is_not_null_results,
+                "eq": eq_results,
+                "lt": lt_results,
+                "gt": gt_results,
+        }
+        
+        plot_errors(error_data, override_settings)
+
+        all_results.append((override_settings, error_data))
+
+    if False:
+        with open(os.path.join(settings.stats.out_dir, settings.stats.filename + "_analysis.pickle"), "wb") as f:
+            print(len(all_results))
+            pickle.dump(all_results, f)
 
 def analyze_data(arr: list[tuple[int, int]]):
     error_percent = [
@@ -248,6 +320,8 @@ def analyze_data(arr: list[tuple[int, int]]):
     max_error = max(error_percent)
     log(f"{mean_error=:.2f},\t{median_error=:.2f},\t{max_error=:.2f}")
 
+    return error_percent
+
 
 def specific_queries():
     f_name = "mini.json"
@@ -258,7 +332,7 @@ def specific_queries():
         collection = json.load(f)
 
     for stats_type in StatType:
-        stats, meta_stats = compute_and_set_stats(collection, stats_type)
+        stats, meta_stats = load_and_apply_stats(collection, stats_type)
 
         eq_ground_truth = get_operation_cardinality(collection=collection, json_path=json_path, operation=lambda x: x == compare_value)
         eq_estimate = estimate_eq_cardinality(json_path_to_key_path(json_path, compare_value), compare_value)

@@ -7,8 +7,14 @@ psutil == 5.9.*
 # Algorithms
 hyperloglog == 0.0.*  # 0.0.14 used
 
-# Convenience stuff
+# To make settings work
 Munch == 2.5.*
 
 # For the tests in stats_cache.py
 pyfakefs == 5.1.*
+
+
+# For data analysis and visualization
+pandas == 1.5.*
+matplotlib == 3.6.*
+seaborn == 0.12.*

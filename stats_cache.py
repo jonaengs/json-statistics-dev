@@ -31,7 +31,7 @@ def add_stats(stats):
     assert stats[1]["stats_type"] == settings.stats.stats_type, (stats[1]["stats_type"], settings.stats.stats_type)
 
     # Store the stat object to file
-    stat_fname = str(time.time_ns())[4:] + ".pickle"  # stat fname can be anything, as long as it is unique
+    stat_fname = str(time.time_ns())[:-4] + ".pickle"  # stat fname can be anything, as long as it is unique
     stat_pickle_path = os.path.join(settings.stats.stats_cache_dir, stat_fname)
     open(stat_pickle_path, mode="x").close()  # Error if file already exists
     with open(stat_pickle_path, mode="wb") as f:
