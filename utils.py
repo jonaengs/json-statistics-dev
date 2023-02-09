@@ -23,6 +23,17 @@ def get_time_formatter(t) -> Callable[[int|float], str]:
     return lambda _t : f"{_t//(1000**i):.0f}{sizes[i]}"
 
 
+def format_time(t) -> Callable[[int|float], str]:
+    """ takes a time in ns and finds the best format (s, ms, μs, ns)"""
+    i = 0
+    while t >= 1000 and i < 3:
+        t /= 1000
+        i += 1
+
+    sizes = ["ns", "us", "ms", "s"]
+    return f"{t:3.2f}{sizes[i]}"
+
+
 if __name__ == '__main__':
     target_dict = {
         1: {

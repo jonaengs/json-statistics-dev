@@ -4,6 +4,7 @@ from compute_stats import get_statistics
 from compute_structures import HistBucket, KeyStat, StatType
 
 from settings import settings
+from trackers import time_tracker
 
 """
 Contains functions for estimating cardinalities based on gathered statistics.
@@ -45,6 +46,7 @@ def _adjust_for_sampling(f):
     return wrapper
 
 @_adjust_for_sampling
+@time_tracker.record_time_used
 def estimate_exists_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
@@ -55,6 +57,7 @@ def estimate_exists_cardinality(stat_path):
     return stats[stat_path].count
 
 @_adjust_for_sampling
+@time_tracker.record_time_used
 def estimate_not_null_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
@@ -65,6 +68,7 @@ def estimate_not_null_cardinality(stat_path):
     return stats[stat_path].valid_count
 
 @_adjust_for_sampling
+@time_tracker.record_time_used
 def estimate_is_null_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
@@ -76,6 +80,7 @@ def estimate_is_null_cardinality(stat_path):
 
 
 @_adjust_for_sampling
+@time_tracker.record_time_used
 def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
@@ -102,11 +107,14 @@ def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
             for bucket in map(lambda b: HistBucket(*b), data.histogram):
                 if bucket_lower_bound > compare_value:
                     estimate += bucket.count
-                elif bucket.upper_bound >= compare_value:
-                    bucket_range = bucket.upper_bound - bucket_lower_bound
-                    if bucket_range == 0:  # Bucket contains only a single value
-                        estimate += bucket.count * (compare_value == bucket.upper_bound)
+                elif bucket.upper_bound > compare_value:
+                    if bucket.ndv == 1:
+                        # Bucket contains only a single value: the upper bound. 
+                        # Because the upper_bound >= compare_val, the entire bucket
+                        # satisfies the gt predicate
+                        estimate += bucket.count
                     else:
+                        bucket_range = bucket.upper_bound - bucket_lower_bound
                         valid_value_range = bucket.upper_bound - compare_value
                         overlap = valid_value_range / bucket_range
                         estimate += bucket.count * overlap
@@ -116,7 +124,8 @@ def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
             return estimate
 
 @_adjust_for_sampling
-def estimate_lt_cardinality(stat_path: str, compare_value: float|int):
+@time_tracker.record_time_used
+def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
     if stat_path not in stats:
@@ -124,13 +133,13 @@ def estimate_lt_cardinality(stat_path: str, compare_value: float|int):
         return est_card * INEQ_MULTIPLIER 
 
     data = stats[stat_path]
-    if compare_value <= data.min_val or data.max_val == data.min_val:
+    if lt_value <= data.min_val or data.max_val == data.min_val:
         return 0
 
     match STATS_TYPE:
         case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
             data_range = data.max_val - data.min_val
-            compare_range = min(compare_value - data.min_val, data_range)
+            compare_range = min(lt_value - data.min_val, data_range)
             overlap = compare_range / data_range
 
             assert 1 >= overlap >= 0
@@ -142,16 +151,21 @@ def estimate_lt_cardinality(stat_path: str, compare_value: float|int):
             estimate = 0
             bucket_lower_bound = data.min_val
             for bucket in map(lambda b: HistBucket(*b), data.histogram):
-                if bucket.upper_bound < compare_value:
+                if bucket.upper_bound < lt_value:
                     estimate += bucket.count
-                elif bucket.upper_bound >= compare_value:
-                    bucket_range = bucket.upper_bound - bucket_lower_bound
-                    if bucket_range == 0:  # Bucket contains only a single value
-                        estimate += bucket.count * (compare_value == bucket.upper_bound)
+                elif bucket.upper_bound >= lt_value:
+                    if bucket.ndv == 1:  
+                        # Bucket contains only a single value: the upper bound. 
+                        # Because the upper_bound >= compare_val, the bucket doesn't satisfy the predicate
+                        # and should not be counted
+                        continue
                     else:
-                        valid_value_range = compare_value - bucket_lower_bound
+                        bucket_range = bucket.upper_bound - bucket_lower_bound
+                        valid_value_range = lt_value - bucket_lower_bound
                         overlap = valid_value_range / bucket_range
                         estimate += bucket.count * overlap
+
+                    # No more buckets will satisfy lt pred, so stop here
                     break
 
                 bucket_lower_bound = bucket.upper_bound
@@ -163,6 +177,7 @@ def estimate_lt_cardinality(stat_path: str, compare_value: float|int):
 # NOTE: Only works for floats and ints
 # For floats, a non-inclusive upper range makes little sense. So this is inclusive at both ends.
 @_adjust_for_sampling
+@time_tracker.record_time_used
 def estimate_range_cardinality(stat_path: str, q_range: range):
     if stat_path not in stats:
         est_card = meta_stats["highest_count_skipped"]
@@ -198,6 +213,7 @@ def estimate_range_cardinality(stat_path: str, q_range: range):
             return estimate
     
 @_adjust_for_sampling
+@time_tracker.record_time_used
 def estimate_eq_cardinality(stat_path: str, compare_value):
     if stat_path not in stats:
         est_card = meta_stats["highest_count_skipped"]

@@ -51,6 +51,7 @@ if __name__ == '__main__':
     import logger
     logger.log(" ".join(sys.argv), quiet=True)
     logger.log(args, quiet=True)
+    logger.logger.log_settings()
 
     # import compute_stats
     # compute_stats.run()

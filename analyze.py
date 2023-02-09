@@ -1,3 +1,4 @@
+from copy import deepcopy
 import itertools
 import json
 import math
@@ -5,8 +6,11 @@ import os
 import pickle
 import random
 from collections import defaultdict, namedtuple
+import sys
 from typing import Any, Callable
 import typing
+
+from munch import munchify
 
 from compute_structures import KeyStatEncoder, PruneStrat, StatType
 from compute_stats import _make_base_statistics, make_key_path
@@ -14,7 +18,8 @@ from settings import lock_settings, settings, unlock_settings
 from use_stats import load_and_apply_stats, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality
 from logger import log
 import data_cache
-from visualize import plot_errors
+from visualize import pause_for_visuals, plot_errors, scatterplot
+from trackers import time_tracker, global_mem_tracker
 
 Json_Number = int | float
 Json_Null = type(None)
@@ -53,6 +58,7 @@ def get_possible_key_paths(json_path: tuple[str], primitives_only=True) -> list[
     return list(set(make_key_path(path, json_path[-1], ex)[0] for ex in ex_vals))
 
 
+@time_tracker.record_time_used
 def get_operation_cardinality(collection: list[dict], json_path, operation: Callable[[Any], bool]):
     def traverse(doc, path: list[str]) -> Any:
         if not path:
@@ -68,7 +74,7 @@ def get_operation_cardinality(collection: list[dict], json_path, operation: Call
 
     return count
 
-
+@time_tracker.record_time_used
 def get_operation_cardinality_2(collection: dict, json_path, operation: Callable[[Any], bool]):
     """
     Doesn't take a normal doc collection. Instead, takes mapping of json_path -> all values from that path.
@@ -78,7 +84,24 @@ def get_operation_cardinality_2(collection: dict, json_path, operation: Callable
     (so instead of 'lambda x: x == val', do 'lambda x: type(x) == type(val) and x == val').
     """
     return sum(map(operation, collection[json_path]))
-    
+
+
+def err_if_high_err(est_pred, threshold, estimate, truth, test_val, json_path, stats, meta_stats):
+    error = abs(truth - estimate) / (truth or 1)
+
+    if error >= threshold:
+        print()
+        print(f"{est_pred} estimate error above threshold {threshold}")
+        print(f"{error=:.3f}, {truth=}, {estimate=}")
+        if test_val is not None:
+            print("val:", test_val)
+        print(json_path, json_path_to_key_path(json_path, test_val))
+        print(stats[json_path_to_key_path(json_path, test_val)])
+        print(meta_stats)
+        print()
+
+        if False:
+            sys.exit(0)
 
 def run_analysis():
     collection = data_cache.load_data()
@@ -112,7 +135,10 @@ def run_analysis():
 
     # We could also simply store values to test against, rather than indexes to those values
     N_TEST_VALUES = 50
-    # random.seed(1)
+    seed = random.randrange(0, sys.maxsize)
+    seed = 2812135314042917201
+    random.seed(seed)
+    log("random seed:", seed)
     json_path_to_test_values = {
         path: [e for e in random.choices(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
         # path: random.choices(set(arr), k=min(N_TEST_VALUES, len(set(arr))))
@@ -155,21 +181,54 @@ def run_analysis():
             [],
             [PruneStrat.MIN_FREQ],
             [PruneStrat.MAX_NO_PATHS],
-            [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
+            # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
+            # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        "num_histogram_buckets": [3, 10, 25, 100],
-        "sampling_rate": [0.0, 0.05, 0.2, 0.5, 0.9],
+        "num_histogram_buckets": [8, 30, 100],
+        "sampling_rate": [0.0, 0.3, 0.9, 0.98],
+        "prune_params": [
+            {
+                "min_freq_threshold": 0.1,
+                "max_no_paths_threshold": 100,
+            },
+            {
+                "min_freq_threshold": 0.01,
+                "max_no_paths_threshold": 200,
+            },
+            {
+                "min_freq_threshold": 0.001,
+                "max_no_paths_threshold": 500,
+            },
+        ]
     }
 
     def generate_settings_combinations():
         all_combinations = itertools.product(*settings_to_try.values())
         for comb in all_combinations:
-            override_setting = {k: v for k, v in zip(settings_to_try, comb)}
+            override_setting = {k: deepcopy(v) for k, v in zip(settings_to_try, comb)}
             
-            # Skip redundant settings
+            ### Skip redundant settings ###
+
             # Skip variations on histogram size if histograms arent being created
             if override_setting["stats_type"] != StatType.HISTOGRAM and override_setting["num_histogram_buckets"] != settings_to_try["num_histogram_buckets"][0]:
                 continue
+            # Skip variations of prune strategy values when no pruning strategy is active
+            if not override_setting["prune_strats"] and override_setting["prune_params"] != settings_to_try["prune_params"][0]:
+                continue
+
+            ### Clean up settings, removing things that don't affect the outcome  ###
+            
+            if override_setting["stats_type"] != StatType.HISTOGRAM:
+                del override_setting["num_histogram_buckets"]
+
+            if not override_setting["prune_strats"]:
+                del override_setting["prune_params"]
+
+            if override_setting["prune_strats"] and PruneStrat.MIN_FREQ not in override_setting["prune_strats"]:
+                del override_setting["prune_params"]["min_freq_threshold"]
+            
+            if override_setting["prune_strats"] and PruneStrat.MAX_NO_PATHS not in override_setting["prune_strats"]:
+                del override_setting["prune_params"]["max_no_paths_threshold"]
 
             yield override_setting
     
@@ -178,23 +237,37 @@ def run_analysis():
 
         for k, v in new_stats_settings.items():
             assert k in settings.stats, f"key {k=} not already present in settings"
-            settings.stats[k] = v
+            if isinstance(v, dict):
+                for k2, v2 in v.items():
+                    assert k2 in v, f"key {k2=} not already present in child settings {v}"
+                    v[k2] = v2
+            else:
+                settings.stats[k] = v
         
         lock_settings()
 
     settings_generator = generate_settings_combinations()
     
-    log("Beginning analysis...")
-    all_results = []
-    settings_generator = [
-        {'stats_type': StatType.HISTOGRAM, 'prune_strats': [], 'num_histogram_buckets': 3, 'sampling_rate': 0.5}
+    test_settings = [
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [], 
+        'num_histogram_buckets': 40, 
+        'sampling_rate': 0
+        },
     ]
+    use_test_settings = False
+    if use_test_settings:
+        settings_generator = test_settings
+    
+    all_results = []
+    log("Beginning analysis...")
     for override_settings in settings_generator:
         log("Using override settings:")
         log(override_settings)
         update_settings(override_settings)
         stats, meta_stats = load_and_apply_stats()
-        log("Using statistics of size:", len(json.dumps([stats, meta_stats], cls=KeyStatEncoder)))
+        stats_size = len(json.dumps([stats, meta_stats], cls=KeyStatEncoder).encode('utf-8'))
+        log("Using statistics of size:", stats_size)
 
 
         # Data has two columns: ground_truth and estimate
@@ -204,6 +277,8 @@ def run_analysis():
         eq_data = []
         lt_data = []
         gt_data = []
+
+        err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if use_test_settings else None
 
         for json_path in json_paths:
             # test_vals = []
@@ -215,22 +290,29 @@ def run_analysis():
             
             # path / exists
             exists_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_exists_comparator())
+            # _exists_ground_truth = get_operation_cardinality(collection=collection, json_path=json_path, operation=get_exists_comparator())
+            # assert exists_ground_truth == _exists_ground_truth, (exists_ground_truth, _exists_ground_truth)
             exists_estimate = estimate_exists_cardinality(json_path_to_base_key_path(json_path=json_path))
             exists_data.append((exists_ground_truth, exists_estimate))
+            err_if_bad_est("exists", 100, exists_estimate, exists_ground_truth)
 
             # is null
             is_null_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_is_null_comparator())
             is_null_estimate = estimate_is_null_cardinality(json_path_to_base_key_path(json_path=json_path))
             is_null_data.append((is_null_ground_truth, is_null_estimate))
+            err_if_bad_est("is_null", 100, is_null_estimate, is_null_ground_truth)
             
             # is not null
             is_not_null_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_is_not_null_comparator())
             is_not_null_estimate = estimate_not_null_cardinality(json_path_to_base_key_path(json_path=json_path))
             is_not_null_data.append((is_not_null_ground_truth, is_not_null_estimate))
+            err_if_bad_est("is_not_null", 100, is_not_null_estimate, is_not_null_ground_truth)
 
             for val in test_vals:
                 if not isinstance(val, typing.get_args(Json_Primitive)) or val is None:
                     continue
+
+                err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, val, json_path=json_path, stats=stats, meta_stats=meta_stats) if use_test_settings else None
 
                 # When a query is made, we find the type of the constant that's being compared against
                 # We do the same thing here to find the correct key-path
@@ -239,34 +321,22 @@ def run_analysis():
                 eq_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_eq_comparator(val))
                 eq_estimate = estimate_eq_cardinality(json_path_to_key_path(json_path, val), val)
                 eq_data.append((eq_ground_truth, eq_estimate))
-                
-                # if (error := abs(eq_ground_truth - eq_estimate) / (eq_ground_truth or 1)) > 500 :
-                #     print()
-                #     print(f"bad estimate: {error=}, {eq_ground_truth=}, {eq_estimate=}")
-                #     print("val:", val)
-                #     print(json_path, json_path_to_key_path(json_path, val))
-                #     print(stats[json_path_to_key_path(json_path, val)])
-                #     print(meta_stats)
-                #     print()
-                #     return
+                err_if_bad_est("eq", 100, eq_estimate, eq_ground_truth)
                 
 
                 # Operators below only work with numeric values
                 if type(val) in (float, int): 
                     # less than operator
-                    try:
-                        lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(val))
-                        lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, val), val)
-                        lt_data.append((lt_ground_truth, lt_estimate))
-                    except:
-                        log(json_path)
-                        log(val)
-                        log(json_path_values[json_path])
+                    lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(val))
+                    lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, val), val)
+                    lt_data.append((lt_ground_truth, lt_estimate))
+                    err_if_bad_est("lt", 100, lt_estimate, lt_ground_truth)
 
                     # greater than operator
                     gt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_gt_comparator(val))
                     gt_estimate = estimate_gt_cardinality(json_path_to_key_path(json_path, val), val)
                     gt_data.append((gt_ground_truth, gt_estimate))
+                    err_if_bad_est("gt", 100, gt_estimate, gt_ground_truth)
 
                     # range
                     # But: how do we combine two vals to get a range?
@@ -300,27 +370,152 @@ def run_analysis():
                 "gt": gt_results,
         }
         
-        plot_errors(error_data, override_settings)
+        if use_test_settings:
+            plot_errors(error_data, override_settings)
 
-        all_results.append((override_settings, error_data))
 
-    if False:
+        meta_data = {
+            "stats_size": stats_size
+        }
+        all_results.append((override_settings, error_data, meta_data))
+
+    global_mem_tracker.record_global_memory()
+    if not use_test_settings:
         with open(os.path.join(settings.stats.out_dir, settings.stats.filename + "_analysis.pickle"), "wb") as f:
-            print(len(all_results))
+            log(len(all_results))
             pickle.dump(all_results, f)
 
+
+@time_tracker.record_time_used
 def analyze_data(arr: list[tuple[int, int]]):
     error_percent = [
         abs(tru - est) / (tru or 1)
         for tru, est in arr
     ]
 
-    mean_error = sum(error_percent) / len(error_percent)
-    median_error = sorted(error_percent)[len(error_percent)//2]
-    max_error = max(error_percent)
-    log(f"{mean_error=:.2f},\t{median_error=:.2f},\t{max_error=:.2f}")
+    sorted_errors = sorted(error_percent)
+    mean_err = sum(error_percent) / len(error_percent)
+    median_err = sorted_errors[len(error_percent)//2]
+    max_err = max(error_percent)
+    _90th_percentile_err = sorted_errors[math.floor(len(error_percent)*0.9)]
+    log(f"{mean_err=:4.3f},\t{median_err=:4.3f},\t{_90th_percentile_err=:4.3f},\t{max_err=:4.3f}")
 
     return error_percent
+
+
+def examine_analysis_results():
+    with open(os.path.join(settings.stats.out_dir, settings.stats.filename + "_analysis.pickle"), "rb") as f:
+        data = pickle.load(f)
+
+    # data is a list of tuples: (override_settings, error_data, meta_data)
+
+    # A query is a override_settings dict matching the settings you're looking for
+    # If the key leads to None, all values will be accepted.
+    # If multiple values should accepted, wrap those values in a *tuple*
+    query_1 = {
+        "stats_type": StatType.HISTOGRAM,
+        "prune_strats": [],
+        "num_histogram_buckets": None,
+        "sampling_rate": (0.0, 0.2, 0.9),
+    }
+    query_2 = {
+        "stats_type": None,
+        "prune_strats": [PruneStrat.MIN_FREQ],
+        "num_histogram_buckets": 3,
+        "sampling_rate": 0.5,
+    }
+    err_keys = [
+        # "eq"
+        "exists"
+    ]
+    
+    def is_match(query, setting):
+        for k, v in query.items():
+            if v is None or \
+                (k in setting and v == setting[k]) or \
+                (isinstance(v, tuple) and any(_v == setting[k] for _v in v)):
+                continue
+
+            return False
+
+        return True
+
+    
+    def get_matches(query):
+        matches = [t for t in data if is_match(query, t[0])]
+        pruned_matches = [
+            (
+                t[0],
+                {ek: t[1][ek] for ek in err_keys},
+                t[2],
+            )
+            for t in matches
+        ]
+        return pruned_matches
+
+
+    def plot_data(tups, split_key=None):
+        """
+        Plots the data in a single group.
+        If the a split key is given, the data will be grouped by 
+        the values the split_key leads to, and each group will be plotted.
+        """
+        if split_key:
+            groups = defaultdict(list)
+            for t in tups:
+                group_key = f"{split_key}={t[0][split_key]}"
+                groups[group_key].append(t)
+
+        else:
+            groups = {"": tups}
+
+        plot_dicts = {}  
+        for group_key, group in groups.items():
+            # identify by which settings the group members vary
+            grouped_settings = defaultdict(set)
+            for member in group:
+                for k, v in member[0].items():
+                    grouped_settings[k].add(v if not isinstance(v, list) else tuple(v))
+
+            assert all(len(v) in (1, len(group)) for v in grouped_settings.values()), (grouped_settings, len(group))
+            varieds = [k for k, v in grouped_settings.items() if len(v) > 1]
+
+            # Fix group member names
+            group_plot_dict = {}
+            for member in group:
+                for pred, err_data in member[1].items():
+                    relevant_settings = {var: member[0][var] for var in varieds}
+                    data_name = f"{pred}_{str(relevant_settings)}"
+                    group_plot_dict[data_name] = err_data
+
+            plot_dicts[group_key] = group_plot_dict
+
+
+        for title, data_dict in plot_dicts.items():
+            plot_errors(data_dict, title)
+
+
+    def plot_stat_size_v_err():
+        errors, stats_sizes, stats_infos = [], [], []
+        for tup in data:
+            err_data = tup[1]["eq"]
+            err = sum(err_data) / len(err_data)
+
+            errors.append(err)
+            stats_sizes.append(tup[2]["stats_size"])
+            stats_infos.append(tup[0])
+
+        
+        scatterplot(errors, stats_sizes, stats_infos)
+
+
+    if False:
+        plot_data(get_matches(query_1), split_key="sampling_rate")
+        # plot_data(get_matches(query_2))
+    
+    plot_stat_size_v_err()
+
+
 
 
 def specific_queries():
@@ -436,4 +631,6 @@ if __name__ == '__main__':
 
     # run_analysis()
 
-    specific_queries()
+    # specific_queries()
+
+    examine_analysis_results()

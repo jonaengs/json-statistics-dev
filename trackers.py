@@ -7,7 +7,7 @@ import inspect
 import atexit
 
 from settings import settings
-from utils import get_time_formatter
+from utils import format_time, get_time_formatter
 import logger
 
 log = lambda *args, **kwargs: logger.log(*args, **kwargs, quiet=not settings.tracking.print_tracking)
@@ -96,7 +96,8 @@ class TimeTracker:
             
             sys_ts = list(zip(*all_ts))[0]
             s_mean, s_min, s_max = sum(sys_ts)/len(sys_ts), min(sys_ts), max(sys_ts)
-            formatter = get_time_formatter(s_mean)
+            # formatter = get_time_formatter(s_mean)
+            formatter = format_time
             log(f"SYSTEM: mean={formatter(s_mean)} min={formatter(s_min)} max={formatter(s_max)} total={formatter(sum(sys_ts))}")
             
             prog_ts = list(zip(*all_ts))[1]

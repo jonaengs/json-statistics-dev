@@ -456,10 +456,11 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
 
 
 # Removes uncommon paths. Returns some summary statistics as well
+@time_tracker.record_time_used
 def make_statistics(collection) -> list[dict, dict]:
     STATS_TYPE = settings.stats.stats_type
     SAMPLING_RATE = settings.stats.sampling_rate
-
+    
     # Tunable vars:
     MIN_FREQ_THRESHOLD = settings.stats.prune_params.min_freq_threshold
     MAX_NUM_PATHS = settings.stats.prune_params.max_no_paths_threshold

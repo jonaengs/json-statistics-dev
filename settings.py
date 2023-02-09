@@ -14,7 +14,7 @@ _settings_are_locked = False
 # munchify converts the dictionary to an object, similar to in Javascript. Allows dot notation for member accesss
 settings = munchify({
     "logger": {
-        "store_output": True,  # redirect output to devnull, so that nothing is stored
+        "store_output": False,  # If False, logger will redirect output to devnull, creating no files
         "silenced": False,
         "out_dir": "logs/",
     },

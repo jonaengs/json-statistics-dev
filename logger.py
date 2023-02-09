@@ -63,7 +63,7 @@ class Logger(metaclass=Singleton):
                 shutil.move(f, os.path.join(old_logs_path, os.path.basename(f)))
 
         self.log(dt.now(), quiet=True)
-        self.log_settings()
+        # self.log_settings()
 
     def log(self, *args, quiet=False, **kwargs):
         if not self.silenced and not quiet:
