@@ -14,6 +14,7 @@ class PruneStrat(Enum):
     MIN_FREQ = 1
     MAX_NO_PATHS = 2
     MAX_PREFIX_LENGTH = 3
+    UNIQUE_SUFFIX = 4
 
 HistBucket = namedtuple("HistBucket", ["upper_bound", "count", "ndv"])
 

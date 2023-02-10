@@ -29,8 +29,10 @@ Json_value = Json_Primitive | list | dict
 # Used to create ranges of real numbers used to stand in for python's builtin integer ranges
 r_range = namedtuple("Real_Range", ("start", "stop"))
 
-def get_base_path(kp, key_sep=".", type_sep="_"):
+def get_base_path(kp):
     # Removes the type suffix from the final typed key in a key path string
+    key_sep = settings.stats.key_path_key_sep 
+    type_sep = settings.stats.key_path_type_sep
     return tuple(s.rsplit(type_sep, 1)[0] for s in kp.split(key_sep))
 
 def json_path_to_key_path(json_path, ex_val):
@@ -85,23 +87,42 @@ def get_operation_cardinality_2(collection: dict, json_path, operation: Callable
     """
     return sum(map(operation, collection[json_path]))
 
+def calc_error(truth, estimate):
+    # Returns the (>1) factor by which the estimate is off from the truth, minus 1
+
+    diff = abs(truth - estimate)
+    # error = diff / (truth or 1)
+    error = diff / (min(truth, estimate) or 1)
+    return error
+
+    if truth <= estimate:
+        return estimate / truth
+    return truth / estimate 
+
 
 def err_if_high_err(est_pred, threshold, estimate, truth, test_val, json_path, stats, meta_stats):
-    error = abs(truth - estimate) / (truth or 1)
+    return
+
+    error = calc_error(truth, estimate)
 
     if error >= threshold:
-        print()
-        print(f"{est_pred} estimate error above threshold {threshold}")
-        print(f"{error=:.3f}, {truth=}, {estimate=}")
-        if test_val is not None:
-            print("val:", test_val)
-        print(json_path, json_path_to_key_path(json_path, test_val))
-        print(stats[json_path_to_key_path(json_path, test_val)])
-        print(meta_stats)
-        print()
+        try:
+            print()
+            print(f"{est_pred} estimate error above threshold {threshold}")
+            print(f"{error=:.3f}, {truth=}, {estimate=}")
+            if test_val is not None:
+                print("val:", test_val)
+            print(json_path, json_path_to_key_path(json_path, test_val))
+            print(stats[json_path_to_key_path(json_path, test_val)])
+            print(meta_stats)
+            print()
 
-        if False:
-            sys.exit(0)
+            if False:
+                sys.exit(0)
+        
+        except:
+            ...
+
 
 def update_stats_settings(new_stats_settings):
     unlock_settings()
@@ -254,12 +275,49 @@ def run_analysis():
     
     test_settings = [
         {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [], 
-        'num_histogram_buckets': 40, 
-        'sampling_rate': 0
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, ], 
+        'num_histogram_buckets': 20,
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, }
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.UNIQUE_SUFFIX], 
+        'num_histogram_buckets': 20,
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, }
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
+        'num_histogram_buckets': 20, 
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 1},
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
+        'num_histogram_buckets': 20, 
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 2},
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
+        'num_histogram_buckets': 20, 
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 3},
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
+        'num_histogram_buckets': 20, 
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 4},
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
+        'num_histogram_buckets': 20, 
+        'sampling_rate': 0,
+        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 5},
         },
     ]
-    use_test_settings = False
+    use_test_settings = True
     if use_test_settings:
         settings_generator = test_settings
     
@@ -347,7 +405,8 @@ def run_analysis():
                     # But: how do we combine two vals to get a range?
 
 
-                # LIKE? IN ARRAY?
+                # LIKE? 
+                # IN ARRAY?
 
 
         log()
@@ -376,7 +435,8 @@ def run_analysis():
         }
         
         if use_test_settings:
-            plot_errors(error_data, override_settings)
+            ...
+            # plot_errors(error_data, override_settings)
 
 
         meta_data = {
@@ -393,10 +453,7 @@ def run_analysis():
 
 @time_tracker.record_time_used
 def analyze_data(arr: list[tuple[int, int]]):
-    error_percent = [
-        abs(tru - est) / (tru or 1)
-        for tru, est in arr
-    ]
+    error_percent = [calc_error(tru, est) for tru, est in arr]
 
     sorted_errors = sorted(error_percent)
     mean_err = sum(error_percent) / len(error_percent)
@@ -673,6 +730,16 @@ if __name__ == '__main__':
     assert prune_params_copy != settings.stats.prune_params
     unlock_settings()
     settings.stats.prune_params = prune_params_copy
+
+
+    assert calc_error(1, 1) == 0, calc_error(1, 1)
+    assert calc_error(1, 2) == calc_error(2, 4) == calc_error(4, 8) == 1
+    assert calc_error(2, 1) == calc_error(4, 2) == calc_error(8, 4) == 1
+    assert calc_error(1, 100) == 99, calc_error(1, 100)
+    assert calc_error(100, 1) == 99, calc_error(100, 1)
+    assert calc_error(0.1, 0.01) == 9, calc_error(0.1, 0.01)
+    assert calc_error(0, 1) == 1, calc_error(0, 1)
+    assert calc_error(1, 0) == 1, calc_error(1, 0)
 
 
     # run_analysis()

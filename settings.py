@@ -25,6 +25,9 @@ settings = munchify({
         "hyperloglog_error": 0.05,
         "num_histogram_buckets": 10,
 
+        "key_path_key_sep": '.',
+        "key_path_type_sep": '_',
+
         "filename": "mini",
         "data_dir": "data/recsys/",
         "out_dir": "stats/",

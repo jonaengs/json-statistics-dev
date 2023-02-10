@@ -3,6 +3,7 @@ from collections import Counter, defaultdict, namedtuple
 import math
 import os
 import random
+import re
 from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
@@ -281,21 +282,30 @@ def compute_histogram(arr) -> list[HistBucket] | None:
 
     return histogram
 
+type_suffixes = {
+    list: "array",
+    dict: "object",
+    None.__class__: "",
+    bool: "boolean",
+    str: "string",
+    int: "number", float: "number",
+}
 
 def make_key_path(_parent_path, key, val)-> tuple[str, str]:
     """returns key path with and without the value type suffix, respectively"""
-    type_str = {
-        list: "array",
-        dict: "object",
-        None.__class__: "",
-        # bool: "boolean",
-        # str: "string",
-        int: "number", float: "number",
-    }.get(type(val), type(val).__name__)
+    key_sep = settings.stats.key_path_key_sep 
+    type_sep = settings.stats.key_path_type_sep
 
-    parent_path = _parent_path + (_parent_path and ".")
+    type_str = type_suffixes[type(val)]
 
-    return parent_path + str(key) + ("_" + type_str if type_str else ""), parent_path + str(key)
+    # ands and if-elses are to avoid having a path start with the key_sep
+    # or end with the type_sep 
+
+    parent_path = _parent_path + (_parent_path and key_sep)
+
+    key_path = parent_path + str(key) + (type_sep + type_str if type_str else "")
+    base_path = parent_path + str(key)
+    return key_path, base_path
 
 
 @local_mem_tracker.record_peak_memory
@@ -314,6 +324,7 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
     STATS_TYPE = STATS_TYPE or settings.stats.stats_type
     SAMPLING_RATE = SAMPLING_RATE or settings.stats.sampling_rate
     HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
+    MAX_PREFIX_LENGTH = settings.stats.prune_params.max_prefix_length_threshold
     
     def record_path_stats(stats, parent_path, key, val) -> str:
         match STATS_TYPE:
@@ -387,21 +398,27 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
         StatType.HISTOGRAM: dict() # stats[key] is either a list or a KeyStat object
     }[STATS_TYPE]
 
-    def traverse(doc, parent_path=""):
+    def traverse(doc, parent_str_path="", parent_path=tuple()):
+        if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats and len(parent_path) == MAX_PREFIX_LENGTH:
+            # Prune parent path to be max_length - 1, so max_length is reached when adding child
+            parent_path = parent_path[1:]
+            if MAX_PREFIX_LENGTH > 1:
+                type_sep = settings.stats.key_path_type_sep
+                key_sep = settings.stats.key_path_key_sep
+                re_special_chars = "^$.\|+*?{}[]()"
+                key_sep = '\\'+key_sep if key_sep in re_special_chars else key_sep
 
-        if type(doc) == list:
-            for key, val in enumerate(doc):  # use index as key
-                new_parent_path = record_path_stats(stats, parent_path, key, val)
-                
-                if type(val) == list or type(val) == dict:
-                    traverse(val, new_parent_path)
+                pattern = f".+{type_sep}[A-Za-z]+{key_sep}"
+                oldest_key = next(re.finditer(pattern, parent_str_path))
+                parent_str_path = parent_str_path[len(oldest_key.group()):]
+            else:
+                parent_str_path = ""
 
-        if type(doc) == dict:
-            for key, val in doc.items():
-                new_parent_path = record_path_stats(stats, parent_path, key, val)
-
-                if type(val) == list or type(val) == dict:
-                    traverse(val, new_parent_path)
+        for key, val in (doc.items() if type(doc) == dict else enumerate(doc)):
+            new_parent_str_path = record_path_stats(stats, parent_str_path, key, val)
+            
+            if type(val) == list or type(val) == dict:
+                traverse(val, new_parent_str_path, parent_path=parent_path + (key, ))
 
 
     log(f"creating {STATS_TYPE.name} statistics for a collection of {len(collection)} documents...")
@@ -461,10 +478,9 @@ def make_statistics(collection) -> list[dict, dict]:
     STATS_TYPE = settings.stats.stats_type
     SAMPLING_RATE = settings.stats.sampling_rate
     
-    # Tunable vars:
     MIN_FREQ_THRESHOLD = settings.stats.prune_params.min_freq_threshold
     MAX_NUM_PATHS = settings.stats.prune_params.max_no_paths_threshold
-    # MAX_PATH_DEPTH (seems terrible, but eh)
+    MAX_PREFIX_LENGTH = settings.stats.prune_params.max_prefix_length_threshold
     # Max Prefix length, Max postfix length (prune middle keys)
         # Look at what JSON PATH in MySQL allows. Like wildcards
 
@@ -490,6 +506,31 @@ def make_statistics(collection) -> list[dict, dict]:
             pruned_path_stats = dict(sorted_by_count[:MAX_NUM_PATHS])
             max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1][1].count
 
+    if PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats:
+        key_sep = settings.stats.key_path_key_sep
+        type_sep = settings.stats.key_path_type_sep
+        for key_path in [k for k in base_stats.keys()]:
+
+            # Only do typed key-paths, so we can retrieve the corresponding base path as well
+            # is_typed = any(key_path.endswith(type_sep + type_str) for type_str in type_suffixes.values() if type_str)
+            # if not is_typed:
+            #     continue
+
+            reduced_path = ""
+            for key in key_path.split(key_sep)[::-1]:
+                reduced_path = f"{key}.{reduced_path}" if reduced_path else key
+                
+                if reduced_path not in base_stats:
+                    # Test that we can move the base path as well
+                    # ...
+                    
+                    # We've found a unique, shortened version of the key-path
+                    base_stats[reduced_path] = base_stats[key_path]
+                    del base_stats[key_path]
+                    
+                    break
+
+
     
     num_pruned = len(base_stats) - len(pruned_path_stats)
     log("num_pruned", num_pruned, f"({len(base_stats)} unique paths total)")
@@ -499,7 +540,10 @@ def make_statistics(collection) -> list[dict, dict]:
         "collection_size": len(collection),
         "stats_type": STATS_TYPE,
         "sampling_rate": SAMPLING_RATE,
-    }
+    } | ({
+        "max_prefix_length": MAX_PREFIX_LENGTH
+    } if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats else {})
+
     return [pruned_path_stats, summary_stats]
 
 
@@ -520,6 +564,11 @@ def get_statistics():
         collection = data_cache.load_data()
         stats = make_statistics(collection)
         stats_cache.add_stats(stats)
+        
+        # Write to stats to a human-readable format for inspection
+        with open(settings.stats.out_path, mode="w") as f:
+            json.dump(stats, f, cls=KeyStatEncoder)
+
     else:
         log("Retrieving cached statistics...")
         stats = stats_cache.get_cached_stats()

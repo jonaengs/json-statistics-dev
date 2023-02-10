@@ -3,6 +3,7 @@
 - [ ] Separate int and float everywhere. When querying for numbers, query for both types (except for equality?) 
   * JSON Tiles differentiates between floats and ints. We can solve the uncertainty of whether the key-path can lead to the other type due to examples being skipped during sampling by combining an estimate for both.
   * How do we combine those estimates? Maybe we can use the skip_threshold times the heuristic multiplier and add that to the estimate we have. 
+  * If we have seen lots of one type and not enough of the other, reduce the estimate if the other is high? Because it seems less likely that we would see so few of the other type if we've seen many of this one?
 
 ## UTILS
 - [x] Make logger put old files in a separate folder
@@ -10,8 +11,8 @@
 ## PRUNING
 - [x] Implement max no. paths pruning  
 - [x] Support for selecting and combining multiple strategies + doing so with cmd args.
-- [ ] Implement suffix and prefix key path pruning
-- [ ] Make something that can use statistics with (suffix/prefix)-pruned key paths
+- [x] Implement and prefix key path pruning
+- [x] Make something that can use statistics with (suffix/prefix)-pruned key paths
 
 ## STATS
 - [x] Find some way to test for "key-path type confusion"
@@ -24,7 +25,7 @@
 - [x] Find the value range for all key-paths
 - [x] Find some strategy for picking values to test with all key-paths
   - [ ] Find an improved approach
-- [ ] Find some way to test various performance metrics for all key-paths with those test values
+- [x] Find some way to test various performance metrics for all key-paths with those test values
 - [ ] Visualize the results
 - [ ] Analyze the result
 

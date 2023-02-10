@@ -1,7 +1,7 @@
 import math
 from compute_stats import get_statistics
 
-from compute_structures import HistBucket, KeyStat, StatType
+from compute_structures import HistBucket, KeyStat, PruneStrat, StatType
 
 from settings import settings
 from trackers import time_tracker
@@ -37,15 +37,53 @@ def _update_stats_info(_STATS_TYPE=None, _stats=None, _meta_stats=None):
     meta_stats = _meta_stats or meta_stats
 
     assert 1 >= meta_stats["sampling_rate"] >= 0
+    assert not (PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats and PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats)
 
-def _adjust_for_sampling(f):
+def _pre_post_process(f):
+    def prune_stat_path(stat_path):
+        max_len = settings.stats.prune_params.max_prefix_length_threshold
+        sep = settings.stats.key_path_key_sep
+        separated = stat_path.split(sep)
+        if len(separated) > max_len:
+            stat_path = sep.join(separated[-max_len:])
+
+        return stat_path
+
+    def find_unique_reduced_key_path(stat_path):
+        key_sep = settings.stats.key_path_key_sep
+        kp_parts = stat_path.split(key_sep)[::-1]
+
+        reduced_kp = ""
+        for kp_part in kp_parts:
+            reduced_kp = kp_part + ((key_sep + reduced_kp) if reduced_kp else "")
+            if reduced_kp in stats:
+                return reduced_kp
+
     def wrapper(*args, **kwargs):
-        result = f(*args, **kwargs)
-        return math.ceil(result / (1 - meta_stats["sampling_rate"]))
+        if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats:
+            # Prune the stat path to be of the maximum allowed length
+            stat_path = args[0]
+            stat_path = prune_stat_path(stat_path)
+            args = (stat_path, ) + args[1:]
+
+        if PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats:
+            stat_path = args[0]
+            stat_path = find_unique_reduced_key_path(stat_path)
+            args = (stat_path, ) + args[1:]
+
+        estimate = f(*args, **kwargs)
+
+        # Adjust estimate result for sampling
+        adjusted = estimate / (1 - meta_stats["sampling_rate"])
+        # And round the result in a consistent way
+        rounded = math.ceil(adjusted)
+        return rounded
 
     return wrapper
 
-@_adjust_for_sampling
+
+
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_exists_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -56,7 +94,7 @@ def estimate_exists_cardinality(stat_path):
 
     return stats[stat_path].count
 
-@_adjust_for_sampling
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_not_null_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -67,7 +105,7 @@ def estimate_not_null_cardinality(stat_path):
 
     return stats[stat_path].valid_count
 
-@_adjust_for_sampling
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_is_null_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -79,7 +117,7 @@ def estimate_is_null_cardinality(stat_path):
     return stats[stat_path].null_count
 
 
-@_adjust_for_sampling
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -123,7 +161,7 @@ def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
 
             return estimate
 
-@_adjust_for_sampling
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -176,7 +214,7 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
 
 # NOTE: Only works for floats and ints
 # For floats, a non-inclusive upper range makes little sense. So this is inclusive at both ends.
-@_adjust_for_sampling
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_range_cardinality(stat_path: str, q_range: range):
     if stat_path not in stats:
@@ -212,7 +250,7 @@ def estimate_range_cardinality(stat_path: str, q_range: range):
 
             return estimate
     
-@_adjust_for_sampling
+@_pre_post_process
 @time_tracker.record_time_used
 def estimate_eq_cardinality(stat_path: str, compare_value):
     if stat_path not in stats:

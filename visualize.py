@@ -18,7 +18,7 @@ def plot_errors(data: dict[str, list[float]], title_data: dict|str):
         grid_item = gs[grid_idx%3, grid_idx//3]
         ax = fig.add_subplot(grid_item)
 
-        ax.hist(arr, range=(0, max(arr)), bins=50)
+        ax.hist(arr, range=(0, max(arr)), bins=100)
         ax.set_ylabel("Count")
         ax.set_xlabel(name)
 
