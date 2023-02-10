@@ -5,8 +5,12 @@ from copy import deepcopy
 import os
 import pickle
 import time
-from compute_structures import StatType
+from compute_structures import PruneStrat, StatType
+
 from settings import settings
+from logger import log
+
+# TODO: Make sure changed prune_params counts as changed settings
 
 """
 Pickles statistics objects and stores them to disk.
@@ -31,12 +35,13 @@ def add_stats(stats):
     assert stats[1]["stats_type"] == settings.stats.stats_type, (stats[1]["stats_type"], settings.stats.stats_type)
 
     # Store the stat object to file
-    stat_fname = str(time.time_ns())[:-4] + ".pickle"  # stat fname can be anything, as long as it is unique
+    stat_fname = str(time.time_ns())[:-3] + ".pickle"  # stat fname can be anything, as long as it is unique
     stat_pickle_path = os.path.join(settings.stats.stats_cache_dir, stat_fname)
     open(stat_pickle_path, mode="x").close()  # Error if file already exists
     with open(stat_pickle_path, mode="wb") as f:
         pickle.dump(obj=stats, file=f)
         f.flush()
+        time.sleep(0.00001)
 
 
     # Delete any other file with the same settings
@@ -106,6 +111,8 @@ def _get_cached_stats_file() -> str | None:
             return f_name
 
 def _get_identifying_settings():
+    return str(settings.stats)
+
     """Get a deepcopy of the settings that identify a stats object, in a pickleable format"""
     def rec_del_lambdas(parent: dict):
         for key, child in parent.items():
@@ -220,6 +227,34 @@ else:
     assert len(_cache_index) == 1
     assert len(os.listdir(settings.stats.stats_cache_dir)) == 2  # index plus single cached obj
     
-
-
     
+    # Check that changing various settings really does cause identifying settings to change
+
+    old_freq_thresh = settings.stats.prune_params.min_freq_threshold
+    old_settings = _get_identifying_settings()
+    settings.stats.prune_params.min_freq_threshold = -1
+    assert old_settings != _get_identifying_settings()
+    settings.stats.prune_params.min_freq_threshold = old_freq_thresh
+    assert old_settings == _get_identifying_settings()
+
+
+    old_freq_thresh = settings.stats.prune_params.min_freq_threshold
+    old_settings = _get_identifying_settings()
+    settings.stats.prune_params.min_freq_threshold *= 0.1
+    assert old_settings != _get_identifying_settings()
+    settings.stats.prune_params.min_freq_threshold = old_freq_thresh
+    assert old_settings == _get_identifying_settings()
+
+    old_sample_rate = settings.stats.sampling_rate
+    old_settings = _get_identifying_settings()
+    settings.stats.sampling_rate = -1
+    assert old_settings != _get_identifying_settings()
+    settings.stats.sampling_rate = old_sample_rate
+    assert old_settings == _get_identifying_settings()
+
+    old_prune_strats = settings.stats.prune_strats
+    old_settings = _get_identifying_settings()
+    settings.stats.prune_strats = list(PruneStrat)
+    assert old_settings != _get_identifying_settings()
+    settings.stats.prune_strats = old_prune_strats
+    assert old_settings == _get_identifying_settings()

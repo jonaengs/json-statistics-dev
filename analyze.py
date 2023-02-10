@@ -1,4 +1,4 @@
-from copy import deepcopy
+from copy import copy, deepcopy
 import itertools
 import json
 import math
@@ -103,6 +103,23 @@ def err_if_high_err(est_pred, threshold, estimate, truth, test_val, json_path, s
         if False:
             sys.exit(0)
 
+def update_stats_settings(new_stats_settings):
+    unlock_settings()
+
+    for k, v in new_stats_settings.items():
+        assert k in settings.stats, f"key {k=} not already present in settings"
+        if isinstance(v, dict):
+            for k2, v2 in v.items():
+                assert k2 in v, f"key {k2=} not already present in child settings {v}"
+                settings.stats[k][k2] = v2
+
+        else:
+            settings.stats[k] = v
+    
+    lock_settings()
+
+
+@time_tracker.record_time_used
 def run_analysis():
     collection = data_cache.load_data()
 
@@ -199,7 +216,7 @@ def run_analysis():
                 "min_freq_threshold": 0.001,
                 "max_no_paths_threshold": 500,
             },
-        ]
+        ],
     }
 
     def generate_settings_combinations():
@@ -231,20 +248,7 @@ def run_analysis():
                 del override_setting["prune_params"]["max_no_paths_threshold"]
 
             yield override_setting
-    
-    def update_settings(new_stats_settings):
-        unlock_settings()
 
-        for k, v in new_stats_settings.items():
-            assert k in settings.stats, f"key {k=} not already present in settings"
-            if isinstance(v, dict):
-                for k2, v2 in v.items():
-                    assert k2 in v, f"key {k2=} not already present in child settings {v}"
-                    v[k2] = v2
-            else:
-                settings.stats[k] = v
-        
-        lock_settings()
 
     settings_generator = generate_settings_combinations()
     
@@ -264,7 +268,8 @@ def run_analysis():
     for override_settings in settings_generator:
         log("Using override settings:")
         log(override_settings)
-        update_settings(override_settings)
+        update_stats_settings(override_settings)
+        
         stats, meta_stats = load_and_apply_stats()
         stats_size = len(json.dumps([stats, meta_stats], cls=KeyStatEncoder).encode('utf-8'))
         log("Using statistics of size:", stats_size)
@@ -403,32 +408,11 @@ def analyze_data(arr: list[tuple[int, int]]):
     return error_percent
 
 
-def examine_analysis_results():
+Query = namedtuple("Query", ("stats", "err_keys", "split_key"))
+def _examine_query(query: Query):
     with open(os.path.join(settings.stats.out_dir, settings.stats.filename + "_analysis.pickle"), "rb") as f:
         data = pickle.load(f)
 
-    # data is a list of tuples: (override_settings, error_data, meta_data)
-
-    # A query is a override_settings dict matching the settings you're looking for
-    # If the key leads to None, all values will be accepted.
-    # If multiple values should accepted, wrap those values in a *tuple*
-    query_1 = {
-        "stats_type": StatType.HISTOGRAM,
-        "prune_strats": [],
-        "num_histogram_buckets": None,
-        "sampling_rate": (0.0, 0.2, 0.9),
-    }
-    query_2 = {
-        "stats_type": None,
-        "prune_strats": [PruneStrat.MIN_FREQ],
-        "num_histogram_buckets": 3,
-        "sampling_rate": 0.5,
-    }
-    err_keys = [
-        # "eq"
-        "exists"
-    ]
-    
     def is_match(query, setting):
         for k, v in query.items():
             if v is None or \
@@ -446,7 +430,7 @@ def examine_analysis_results():
         pruned_matches = [
             (
                 t[0],
-                {ek: t[1][ek] for ek in err_keys},
+                {ek: t[1][ek] for ek in query.err_keys},
                 t[2],
             )
             for t in matches
@@ -495,7 +479,16 @@ def examine_analysis_results():
             plot_errors(data_dict, title)
 
 
+    query_results = get_matches(query.stats)
+    plot_data(query_results, split_key=query.split_key)
+
+
+def examine_analysis_results():
     def plot_stat_size_v_err():
+        # data is a list of tuples: (override_settings, error_data, meta_data)
+        with open(os.path.join(settings.stats.out_dir, settings.stats.filename + "_analysis.pickle"), "rb") as f:
+            data = pickle.load(f)
+
         errors, stats_sizes, stats_infos = [], [], []
         for tup in data:
             err_data = tup[1]["eq"]
@@ -505,13 +498,39 @@ def examine_analysis_results():
             stats_sizes.append(tup[2]["stats_size"])
             stats_infos.append(tup[0])
 
-        
         scatterplot(errors, stats_sizes, stats_infos)
 
 
+    # The query stats is a override_settings dict matching the settings you're looking for.
+    # If the key leads to None, all values will be accepted.
+    # If multiple values should accepted, wrap those values in a *tuple*
+    query_1 = Query(
+        stats={
+            "stats_type": StatType.HISTOGRAM,
+            "prune_strats": [],
+            "num_histogram_buckets": None,
+            "sampling_rate": (0.0, 0.2, 0.9),
+        },
+        err_keys=[
+            "eq"
+        ],
+        split_key="sampling_rate"
+    )
+    query_2 = Query(
+        stats={
+            "stats_type": None,
+            "prune_strats": [PruneStrat.MIN_FREQ],
+            "num_histogram_buckets": 3,
+            "sampling_rate": 0.5,
+        },
+        err_keys = [
+            "exists"
+        ],
+        split_key=None
+    )
+
     if False:
-        plot_data(get_matches(query_1), split_key="sampling_rate")
-        # plot_data(get_matches(query_2))
+        _examine_query(query_1)
     
     plot_stat_size_v_err()
 
@@ -629,8 +648,26 @@ if __name__ == '__main__':
         'a_object.up_down_array.0_str', 'a_object.up_down_array.0_bool', 'a_object.up_down_array.0_number', 'a_object.up_down_array.0'
     ))
 
+    # Test update_stats_settings function
+    stats_settings_copy = copy(settings.stats)
+    t1 = {"prune_strats": []}
+    assert stats_settings_copy == settings.stats
+    update_stats_settings(t1)
+    assert stats_settings_copy != settings.stats
+    unlock_settings()
+    settings.stats = stats_settings_copy
+
+    prune_params_copy = copy(settings.stats.prune_params)
+    t2 = {"prune_params": {"min_freq_threshold": 0.000001}}
+    assert prune_params_copy == settings.stats.prune_params
+    update_stats_settings(t2)
+    assert prune_params_copy != settings.stats.prune_params
+    unlock_settings()
+    settings.stats.prune_params = prune_params_copy
+
+
     # run_analysis()
 
     # specific_queries()
 
-    examine_analysis_results()
+    # examine_analysis_results()

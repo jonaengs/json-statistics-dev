@@ -38,7 +38,7 @@ def scatterplot(x, y, point_data):
     ax.set_ylabel("Stats size")
     ax.set_xlabel("Mean error")
 
-    annotation = ax.annotate("", xy=(0, 0), xytext=(10, 5), textcoords="offset points", bbox={"boxstyle": "round", "fc": "w"})
+    annotation = ax.annotate("", xy=(0, 0), xytext=(10, -20), textcoords="offset points", bbox={"boxstyle": "round", "fc": "w"})
     annotation.set_visible(False)
 
     def update_annotation(hover_target_idx):

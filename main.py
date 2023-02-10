@@ -58,3 +58,4 @@ if __name__ == '__main__':
 
     import analyze
     analyze.run_analysis()
+    # analyze.examine_analysis_results()

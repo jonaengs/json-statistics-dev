@@ -32,7 +32,7 @@ class Logger(metaclass=Singleton):
             # file_name = f"{sys.argv[0][:-3]}_{dt.now().strftime('%H.%M.%S')}.log"
             # file_name = f"{dt.now().strftime('%H.%M.%S')}_{sys.argv[0][:-3]}.log"
             # file_name = f"{sys.argv[0][:-3]}_{time.time_ns()}.log"
-            file_name = f"{str(time.time_ns())[5:-3]}_{sys.argv[0][:-3]}.log"
+            file_name = f"{str(time.time_ns())[:-6]}_{sys.argv[0][:-3]}.log"
             log_file_path = os.path.join(settings.logger.out_dir, file_name)
             open(log_file_path, mode="x")
             self.file = open(log_file_path, mode="w")
