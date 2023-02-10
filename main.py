@@ -57,5 +57,5 @@ if __name__ == '__main__':
     # compute_stats.run()
 
     import analyze
-    analyze.run_analysis()
-    # analyze.examine_analysis_results()
+    # analyze.run_analysis()
+    analyze.examine_analysis_results()

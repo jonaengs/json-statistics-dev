@@ -153,7 +153,7 @@ def run_analysis():
     # We could also simply store values to test against, rather than indexes to those values
     N_TEST_VALUES = 50
     seed = random.randrange(0, sys.maxsize)
-    seed = 2812135314042917201
+    # seed = 2812135314042917201
     random.seed(seed)
     log("random seed:", seed)
     json_path_to_test_values = {
@@ -403,7 +403,7 @@ def analyze_data(arr: list[tuple[int, int]]):
     median_err = sorted_errors[len(error_percent)//2]
     max_err = max(error_percent)
     _90th_percentile_err = sorted_errors[math.floor(len(error_percent)*0.9)]
-    log(f"{mean_err=:4.3f},\t{median_err=:4.3f},\t{_90th_percentile_err=:4.3f},\t{max_err=:4.3f}")
+    log(f"{mean_err=:6.1f},   {median_err=:6.1f},   {_90th_percentile_err=:6.1f},   {max_err=:6.1f}")
 
     return error_percent
 
@@ -509,19 +509,28 @@ def examine_analysis_results():
             "stats_type": StatType.HISTOGRAM,
             "prune_strats": [],
             "num_histogram_buckets": None,
-            "sampling_rate": (0.0, 0.2, 0.9),
+            "sampling_rate": (0.0, 0.3, 0.9, 0.98),
+            "prune_params": {
+                "min_freq_threshold": 0.01,
+                "max_no_paths_threshold": 200,
+            },
         },
         err_keys=[
             "eq"
         ],
         split_key="sampling_rate"
     )
+
     query_2 = Query(
         stats={
             "stats_type": None,
             "prune_strats": [PruneStrat.MIN_FREQ],
             "num_histogram_buckets": 3,
-            "sampling_rate": 0.5,
+            "sampling_rate": None,
+            "prune_params": {
+                "min_freq_threshold": 0.01,
+                "max_no_paths_threshold": 200,
+            },
         },
         err_keys = [
             "exists"
