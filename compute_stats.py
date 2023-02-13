@@ -507,28 +507,70 @@ def make_statistics(collection) -> list[dict, dict]:
             max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1][1].count
 
     if PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats:
+        approach = 2
+        
         key_sep = settings.stats.key_path_key_sep
         type_sep = settings.stats.key_path_type_sep
-        for key_path in [k for k in base_stats.keys()]:
 
-            # Only do typed key-paths, so we can retrieve the corresponding base path as well
-            # is_typed = any(key_path.endswith(type_sep + type_str) for type_str in type_suffixes.values() if type_str)
-            # if not is_typed:
-            #     continue
+        # Sort key paths, so that similar key_paths (e.g., array indices) come straight after one another
+        # This will also make base paths appear before their typed counterparts
+        all_key_paths = list(sorted(k for k in base_stats.keys()))
 
-            reduced_path = ""
-            for key in key_path.split(key_sep)[::-1]:
-                reduced_path = f"{key}.{reduced_path}" if reduced_path else key
-                
-                if reduced_path not in base_stats:
-                    # Test that we can move the base path as well
-                    # ...
+
+        # Approach 1:
+        # Very simple. Check if the final typed key already exists in the set. 
+        # If not, replace the key-value pair [tk_1.tk_2...tk_n => <stats>] with [tk_n => <stats>]
+        # If it already exists, try tk_n-1.tk_n, and so on
+
+        # Problem: On lookup, if multiple key-paths have the same ending, we don't know which
+        # of those we are retrieving stats for. Leading occasional massively wrong estimates
+        if approach == 1:
+            for key_path in all_key_paths:
+
+                # Only do typed key-paths, so we can retrieve the corresponding base path as well
+                # is_typed = any(key_path.endswith(type_sep + type_str) for type_str in type_suffixes.values() if type_str)
+                # if not is_typed:
+                #     continue
+
+                reduced_path = ""
+                for key in key_path.split(key_sep)[1::-1]:
+                    reduced_path = f"{key}.{reduced_path}" if reduced_path else key
                     
-                    # We've found a unique, shortened version of the key-path
-                    base_stats[reduced_path] = base_stats[key_path]
-                    del base_stats[key_path]
+                    if reduced_path not in base_stats:
+                        # Test that we can move the base path as well
+                        # ...
+                        
+                        # We've found a unique, shortened version of the key-path
+                        base_stats[reduced_path] = base_stats[key_path]
+                        del base_stats[key_path]
+                        
+                        break
+
+        # Approach 2:
+        # Check that no other key_path ends with the typed key. Only then do we shorten.
+        # As with the prev approach, we iteratively increase the key size going backwards.
+        # With this approach, we can lookup by starting with the whole key-path and reducing iteratively until we find a match
+        elif approach == 2:
+            for key_path in all_key_paths:
+                reduced_path = ""
+                for key in key_path.split(key_sep)[::-1][:-1]:
+                    reduced_path = f"{key}.{reduced_path}" if reduced_path else key
                     
-                    break
+                    collisions = [
+                        cmp_key_path
+                        for cmp_key_path in all_key_paths
+                        if cmp_key_path != key_path and cmp_key_path.endswith(reduced_path)
+                    ]
+
+                    if not any(collisions):
+                        base_stats[reduced_path] = base_stats[key_path]
+                        del base_stats[key_path]
+                        break
+
+        
+        else:
+            assert False
+
 
 
     

@@ -5,8 +5,10 @@
   * How do we combine those estimates? Maybe we can use the skip_threshold times the heuristic multiplier and add that to the estimate we have. 
   * If we have seen lots of one type and not enough of the other, reduce the estimate if the other is high? Because it seems less likely that we would see so few of the other type if we've seen many of this one?
 
-## UTILS
+
+## UTILS / TRACKERS / LOGGER / CACHING
 - [x] Make logger put old files in a separate folder
+- [ ] Make tracker decorators take an optional argument specifying extra information to identify the function by so that we can differentiate between e.g., the time a function uses when different StatTypes are active.
 
 ## PRUNING
 - [x] Implement max no. paths pruning  

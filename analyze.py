@@ -219,23 +219,34 @@ def run_analysis():
             [],
             [PruneStrat.MIN_FREQ],
             [PruneStrat.MAX_NO_PATHS],
+            [PruneStrat.UNIQUE_SUFFIX],
+            [PruneStrat.MAX_PREFIX_LENGTH],
+            
+            [PruneStrat.MIN_FREQ, PruneStrat.MAX_PREFIX_LENGTH],
+            [PruneStrat.MIN_FREQ, PruneStrat.UNIQUE_SUFFIX],
+
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        "num_histogram_buckets": [8, 30, 100],
-        "sampling_rate": [0.0, 0.3, 0.9, 0.98],
+        # "num_histogram_buckets": [8, 30, 100],
+        "num_histogram_buckets": [8, 30],
+        # "sampling_rate": [0.0, 0.3, 0.9, 0.98],
+        "sampling_rate": [0.0, 0.3, 0.9],
         "prune_params": [
             {
                 "min_freq_threshold": 0.1,
                 "max_no_paths_threshold": 100,
+                "max_prefix_length_threshold": 3,
             },
             {
                 "min_freq_threshold": 0.01,
                 "max_no_paths_threshold": 200,
+                "max_prefix_length_threshold": 4,
             },
             {
                 "min_freq_threshold": 0.001,
                 "max_no_paths_threshold": 500,
+                "max_prefix_length_threshold": 4,
             },
         ],
     }
@@ -275,6 +286,16 @@ def run_analysis():
     
     test_settings = [
         {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [], 
+        'num_histogram_buckets': 20,
+        'sampling_rate': 0,
+        },
+        {'stats_type': StatType.HISTOGRAM,
+        'prune_strats': [PruneStrat.UNIQUE_SUFFIX], 
+        'num_histogram_buckets': 20,
+        'sampling_rate': 0,
+        },
+        {'stats_type': StatType.HISTOGRAM,
         'prune_strats': [PruneStrat.MAX_NO_PATHS, ], 
         'num_histogram_buckets': 20,
         'sampling_rate': 0,
@@ -310,14 +331,8 @@ def run_analysis():
         'sampling_rate': 0,
         "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 4},
         },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
-        'num_histogram_buckets': 20, 
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 5},
-        },
     ]
-    use_test_settings = True
+    use_test_settings = False
     if use_test_settings:
         settings_generator = test_settings
     

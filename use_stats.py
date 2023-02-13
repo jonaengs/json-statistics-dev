@@ -39,6 +39,41 @@ def _update_stats_info(_STATS_TYPE=None, _stats=None, _meta_stats=None):
     assert 1 >= meta_stats["sampling_rate"] >= 0
     assert not (PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats and PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats)
 
+def _find_unique_reduced_key_path(stat_path):
+    key_sep = settings.stats.key_path_key_sep
+    kp_parts = stat_path.split(key_sep)[::-1]
+
+    approach = 2
+
+    # Approach 1:
+    # Build up key-path from shortest to longest
+    if approach == 1:
+        reduced_kp = ""
+        for kp_part in kp_parts:
+            reduced_kp = f"{kp_part}.{reduced_kp}" if reduced_kp else kp_part
+            if reduced_kp in stats:
+                return reduced_kp
+
+
+    # Approach 2:
+    # Reduce key-path from longest to shortest
+    elif approach == 2:
+        reduced_kp = stat_path
+        while reduced_kp:
+            if reduced_kp in stats:
+                return reduced_kp
+            
+            next_sep_idx = reduced_kp.find(key_sep)
+            if next_sep_idx == -1:
+                break
+
+            reduced_kp = reduced_kp[next_sep_idx+1:]
+
+    
+    # Return stat path if we can't find any reduced paths
+    return stat_path
+
+
 def _pre_post_process(f):
     def prune_stat_path(stat_path):
         max_len = settings.stats.prune_params.max_prefix_length_threshold
@@ -49,16 +84,6 @@ def _pre_post_process(f):
 
         return stat_path
 
-    def find_unique_reduced_key_path(stat_path):
-        key_sep = settings.stats.key_path_key_sep
-        kp_parts = stat_path.split(key_sep)[::-1]
-
-        reduced_kp = ""
-        for kp_part in kp_parts:
-            reduced_kp = kp_part + ((key_sep + reduced_kp) if reduced_kp else "")
-            if reduced_kp in stats:
-                return reduced_kp
-
     def wrapper(*args, **kwargs):
         if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats:
             # Prune the stat path to be of the maximum allowed length
@@ -68,7 +93,7 @@ def _pre_post_process(f):
 
         if PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats:
             stat_path = args[0]
-            stat_path = find_unique_reduced_key_path(stat_path)
+            stat_path = _find_unique_reduced_key_path(stat_path)
             args = (stat_path, ) + args[1:]
 
         estimate = f(*args, **kwargs)
@@ -296,3 +321,59 @@ Example usage:
     estimate_eq_cardinality("key_obj.0_num", 5)
     ...
 """
+
+
+if __name__ == '__main__':
+    pre_pruned_stats = {
+        'a': 1,
+        'a_object': 1,
+        'a_object.b': 1,
+        'a_object.b_array': 1,
+        'a_object.b_array.0': 1,
+        'a_object.b_array.0_number': 1,
+
+        'b': 1,
+        'b_object': 1,
+        'b_object.b': 1,
+        'b_object.b_array': 1,
+        'b_object.b_array.0': 1,
+        'b_object.b_array.0_number': 1,
+
+        'c': 1,
+        'c_object': 1,
+        'c_object.d': 1,
+        'c_object.d_array': 1,
+        'c_object.d_array.0': 1,
+        'c_object.d_array.0_number': 1,
+        
+        'c_object.d_array.0_str': 1,
+    }
+
+    pruned_stats = {
+        'a': 1,
+        'a_object': 1,
+        'a_object.b': 1,
+        'a_object.b_array': 1,
+        'a_object.b_array.0': 1,
+        'a_object.b_array.0_number': 1,
+
+        'b': 1,
+        'b_object': 1,
+        'b_object.b': 1,
+        'b_object.b_array': 1,
+        'b_object.b_array.0': 1,
+        'b_object.b_array.0_number': 1,
+        
+        'c': 1,
+        'c_object': 1,
+        'd': 1,
+        'd_array': 1,
+        'd_array.0': 1,
+        'd_array.0_number': 1,
+
+        '0_str': 1,
+    }
+
+    stats = pruned_stats
+    for pre_pruned_k, pruned_k in zip(pre_pruned_stats.keys(), pruned_stats.keys()):
+        assert _find_unique_reduced_key_path(pre_pruned_k) == pruned_k, (_find_unique_reduced_key_path(pre_pruned_k), pruned_k)
