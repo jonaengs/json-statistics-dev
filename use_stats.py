@@ -5,6 +5,7 @@ from compute_structures import HistBucket, KeyStat, PruneStrat, StatType
 
 from settings import settings
 from trackers import time_tracker
+from logger import log
 
 """
 Contains functions for estimating cardinalities based on gathered statistics.
@@ -74,7 +75,7 @@ def _find_unique_reduced_key_path(stat_path):
     return stat_path
 
 
-def _pre_post_process(f):
+def _apply_common_pre_post_processing(f):
     def prune_stat_path(stat_path):
         max_len = settings.stats.prune_params.max_prefix_length_threshold
         sep = settings.stats.key_path_key_sep
@@ -98,6 +99,12 @@ def _pre_post_process(f):
 
         estimate = f(*args, **kwargs)
 
+        if estimate < 0:
+            log()
+            log("Estimate below zero:")
+            log(f"{estimate=}")
+            log(f.__name__, args, kwargs)
+
         # Adjust estimate result for sampling
         adjusted = estimate / (1 - meta_stats["sampling_rate"])
         # And round the result in a consistent way
@@ -108,7 +115,7 @@ def _pre_post_process(f):
 
 
 
-@_pre_post_process
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
 def estimate_exists_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -119,7 +126,7 @@ def estimate_exists_cardinality(stat_path):
 
     return stats[stat_path].count
 
-@_pre_post_process
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
 def estimate_not_null_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -130,7 +137,7 @@ def estimate_not_null_cardinality(stat_path):
 
     return stats[stat_path].valid_count
 
-@_pre_post_process
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
 def estimate_is_null_cardinality(stat_path):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -142,9 +149,9 @@ def estimate_is_null_cardinality(stat_path):
     return stats[stat_path].null_count
 
 
-@_pre_post_process
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
-def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
+def estimate_gt_cardinality(stat_path: str, gt_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
 
     # If statistics are missing for this key-path, stop early
@@ -152,25 +159,50 @@ def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
         est_card = meta_stats["highest_count_skipped"]
         return est_card * INEQ_MULTIPLIER 
 
-    data = stats[stat_path]
+    data: KeyStat = stats[stat_path]
     # max_val not gathered for str and bool types
-    if compare_value >= data.max_val or data.max_val == data.min_val:
+    if gt_value >= data.max_val or data.max_val == data.min_val:
         return 0
 
     match STATS_TYPE:
-        case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+        case StatType.BASIC | StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
             data_range = data.max_val - data.min_val
-            compare_range = min(data.max_val - compare_value, data_range)
+            compare_range = min(data.max_val - gt_value, data_range)
             overlap = compare_range / data_range
 
             return overlap * data.valid_count
+        case StatType.NDV_WITH_MODE:
+            # same as BASIC | BASIC_NDV | HYPERLOG, except we add/subtract
+            # based on whether the mode value is included. 
+
+            mode_modifier = 0
+            if data.mode_info:
+                mode, mode_count = data.mode_info
+                expected_count = data.valid_count/data.ndv
+
+                # If mode is included, increase result by
+                # how much more the mode occurs than the average value.
+                # If it's not included, decrease by that value.
+                if mode > gt_value:
+                    mode_modifier = mode_count - expected_count
+                else:
+                    mode_modifier = expected_count - mode_count
+
+            data_range = data.max_val - data.min_val
+            compare_range = min(data.max_val - gt_value, data_range)
+            overlap = compare_range / data_range
+            # Say that overlap must be at least as much as if we did x=max_val
+            # overlap = max(overlap, (data.valid_count/data.ndv) * (gt_value < data.max_val))
+
+            estimate = (overlap * data.valid_count) + mode_modifier
+            return max(estimate, gt_value < data.max_val)  # Return at least 1 if compare value is valid
         case StatType.HISTOGRAM:
             estimate = 0
             bucket_lower_bound = data.min_val
             for bucket in map(lambda b: HistBucket(*b), data.histogram):
-                if bucket_lower_bound > compare_value:
+                if bucket_lower_bound > gt_value:
                     estimate += bucket.count
-                elif bucket.upper_bound > compare_value:
+                elif bucket.upper_bound > gt_value:
                     if bucket.ndv == 1:
                         # Bucket contains only a single value: the upper bound. 
                         # Because the upper_bound >= compare_val, the entire bucket
@@ -178,7 +210,7 @@ def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
                         estimate += bucket.count
                     else:
                         bucket_range = bucket.upper_bound - bucket_lower_bound
-                        valid_value_range = bucket.upper_bound - compare_value
+                        valid_value_range = bucket.upper_bound - gt_value
                         overlap = valid_value_range / bucket_range
                         estimate += bucket.count * overlap
 
@@ -186,7 +218,10 @@ def estimate_gt_cardinality(stat_path: str, compare_value: float|int):
 
             return estimate
 
-@_pre_post_process
+        case _:
+            assert False, f"MISSING CASE FOR: {STATS_TYPE}"
+
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
 def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
     assert meta_stats["stats_type"] == STATS_TYPE, f"{meta_stats['stats_type']=}, {STATS_TYPE=}"
@@ -200,14 +235,37 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
         return 0
 
     match STATS_TYPE:
-        case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+        case StatType.BASIC | StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
             data_range = data.max_val - data.min_val
             compare_range = min(lt_value - data.min_val, data_range)
             overlap = compare_range / data_range
 
-            assert 1 >= overlap >= 0
-
             return overlap * data.valid_count
+        case StatType.NDV_WITH_MODE:
+            # same as BASIC | BASIC_NDV | HYPERLOG, except we add/subtract
+            # based on whether the mode value is included. 
+
+            mode_modifier = 0
+            if data.mode_info:
+                mode, mode_count = data.mode_info
+                expected_count = data.valid_count/data.ndv
+
+                # If mode is included, increase result by
+                # how much more the mode occurs than the average value.
+                # If it's not included, decrease by that value.
+                if mode < lt_value:
+                    mode_modifier = mode_count - expected_count
+                else:
+                    mode_modifier = expected_count - mode_count
+
+            data_range = data.max_val - data.min_val
+            compare_range = min(lt_value - data.min_val, data_range)
+            overlap = compare_range / data_range
+            # Say that overlap must be at least as much as if we did x=min_val
+            # overlap = max(overlap, (data.valid_count/data.ndv) * (lt_value > data.min_val))
+            estimate = (overlap * data.valid_count) + mode_modifier
+
+            return max(estimate, 1)
         case StatType.HISTOGRAM:
             # NOTE: Assumed bucket structure [upper_bound, val_count, ndv]
 
@@ -235,11 +293,14 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
 
 
             return estimate
+        
+        case _:
+            assert False, f"MISSING CASE FOR: {STATS_TYPE}"
 
 
 # NOTE: Only works for floats and ints
 # For floats, a non-inclusive upper range makes little sense. So this is inclusive at both ends.
-@_pre_post_process
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
 def estimate_range_cardinality(stat_path: str, q_range: range):
     if stat_path not in stats:
@@ -248,7 +309,7 @@ def estimate_range_cardinality(stat_path: str, q_range: range):
 
     data: KeyStat = stats[stat_path]
     match STATS_TYPE:
-        case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+        case StatType.BASIC | StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
             overlapping_range = min(data.max_val, q_range.stop) - max(data.min_val, q_range.start)
 
             if overlapping_range < 0:
@@ -274,15 +335,18 @@ def estimate_range_cardinality(stat_path: str, q_range: range):
                 
 
             return estimate
+
+        case _:
+            assert False, f"MISSING CASE FOR: {STATS_TYPE}"
     
-@_pre_post_process
+@_apply_common_pre_post_processing
 @time_tracker.record_time_used
 def estimate_eq_cardinality(stat_path: str, compare_value):
     if stat_path not in stats:
         est_card = meta_stats["highest_count_skipped"]
         return est_card * (EQ_MULTIPLIER if type(compare_value) != bool else EQ_BOOL_MULTIPLIER)
 
-    data = stats[stat_path]
+    data: KeyStat = stats[stat_path]
     # We currently don't track min and max for strings and bools. So we can't check if we're outside the range 
     # for those values
     if type(compare_value) not in (str, bool) and (compare_value > data.max_val or compare_value < data.min_val):
@@ -290,11 +354,28 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
 
     match STATS_TYPE:
         case StatType.BASIC:
-            # TODO: On EQ float, should we just return 0? 
+            # On EQ float, should we just return 0? 
             return stats[stat_path].valid_count * (EQ_MULTIPLIER if type(compare_value) != bool else EQ_BOOL_MULTIPLIER)
-        case StatType.BASIC_NDV | StatType.HYPERLOG:
-            return data.valid_count/(data.ndv if type(compare_value) != bool else 2)  # No ndv data for bools
+        case StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
+            return data.valid_count/data.ndv
+            # return data.valid_count/(data.ndv if type(compare_value) != bool else 2)  # No ndv data for bools
+        case StatType.NDV_WITH_MODE:
+            if not data.mode_info:
+                # Fallback in case mode_info not stored for some reason
+                return data.valid_count/data.ndv
 
+            mode, mode_count = data.mode_info
+            if compare_value == mode:
+                return mode_count
+            # Avoid division by zero error below.
+            if data.ndv == 1:
+                # If we've only seen the mode, and the query value is not the mode, then
+                # we're safe to assume a cardinality of 0
+                return 0
+
+            # If not eq mode. Divide by ndv-1 as we can exclude one possible value
+            estimate = (data.valid_count - mode_count) / (data.ndv - 1)
+            return estimate
         case StatType.HISTOGRAM:
             # Check for string singleton histograms
             if type(compare_value) == str:
@@ -312,6 +393,8 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
             # If we went past all buckets and never found anything with our value, estimate is 0
             return 0
 
+        case _:
+            assert False, f"MISSING CASE FOR: {STATS_TYPE}"
 
 
 """

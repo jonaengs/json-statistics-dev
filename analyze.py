@@ -7,12 +7,13 @@ import pickle
 import random
 from collections import defaultdict, namedtuple
 import sys
+import time
 from typing import Any, Callable
 import typing
 
 from munch import munchify
 
-from compute_structures import KeyStatEncoder, PruneStrat, StatType
+from compute_structures import Json_Primitive, Json_Primitive_No_Null, KeyStatEncoder, PruneStrat, StatType
 from compute_stats import _make_base_statistics, make_key_path
 from settings import lock_settings, settings, unlock_settings
 from use_stats import load_and_apply_stats, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality
@@ -21,10 +22,6 @@ import data_cache
 from visualize import pause_for_visuals, plot_errors, scatterplot
 from trackers import time_tracker, global_mem_tracker
 
-Json_Number = int | float
-Json_Null = type(None)
-Json_Primitive = Json_Number | bool | str | Json_Null
-Json_value = Json_Primitive | list | dict
 
 # Used to create ranges of real numbers used to stand in for python's builtin integer ranges
 r_range = namedtuple("Real_Range", ("start", "stop"))
@@ -100,28 +97,31 @@ def calc_error(truth, estimate):
     return truth / estimate 
 
 
-def err_if_high_err(est_pred, threshold, estimate, truth, test_val, json_path, stats, meta_stats):
-    return
-
+_prev_err_json_path = None
+def err_if_high_err(predicate_name: str, threshold, estimate, truth, test_val, json_path, stats, meta_stats):
+    global _prev_err_json_path
     error = calc_error(truth, estimate)
 
-    if error >= threshold:
-        try:
-            print()
-            print(f"{est_pred} estimate error above threshold {threshold}")
-            print(f"{error=:.3f}, {truth=}, {estimate=}")
-            if test_val is not None:
-                print("val:", test_val)
-            print(json_path, json_path_to_key_path(json_path, test_val))
-            print(stats[json_path_to_key_path(json_path, test_val)])
-            print(meta_stats)
-            print()
+    # if error >= threshold:
+    if error >= threshold and json_path != _prev_err_json_path:
+        _prev_err_json_path = json_path
 
-            if False:
-                sys.exit(0)
-        
-        except:
-            ...
+        log()
+        log(f"{predicate_name.upper()} estimate error above threshold {threshold}")
+        log(f"{error=:.3f}, {truth=}, {estimate=}")
+        log("val:", test_val)
+
+        computed_key_path = json_path_to_key_path(json_path, test_val)
+        log(json_path, computed_key_path)
+        if computed_key_path in stats:
+            log(stats[computed_key_path])
+        else:
+            log("*computed key path not in stats*")
+        log(meta_stats)
+        log()
+
+        # sys.exit(0)
+
 
 
 def update_stats_settings(new_stats_settings):
@@ -169,21 +169,24 @@ def run_analysis():
 
     for doc in collection:
         traverse_and_record(doc)
+    json_paths = list(sorted(json_paths))  # Make json_path iteration order deterministic
 
-
+    
     # We could also simply store values to test against, rather than indexes to those values
     N_TEST_VALUES = 50
-    seed = random.randrange(0, sys.maxsize)
-    # seed = 2812135314042917201
+    # seed = random.randrange(0, sys.maxsize)
+    seed = 1273304722126503270
     random.seed(seed)
     log("random seed:", seed)
     json_path_to_test_values = {
-        path: [e for e in random.choices(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
+        # Not perfect. maybe try making arr into set before sampling. May require len(arr) adjustment
+        path: list(set([e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if isinstance(e, Json_Primitive_No_Null)]))
+        # path: [e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
         # path: random.choices(set(arr), k=min(N_TEST_VALUES, len(set(arr))))
         for path, arr in json_path_values.items()
     }
 
-    
+
     # pprint(sorted(json_paths)[:5])
     # pprint(sorted(key_paths)[:5])
 
@@ -202,17 +205,17 @@ def run_analysis():
 
     # key_path_ranges = {k: (min(vs), max(vs)) for k, vs in key_path_values.items() if not all(v is None for v in vs) }
     
+    def check_type(x, y, number=True):
+        return type(x) == type(y) or (type(x) in (int, float) and type(y) in (int, float) if number else False)
+
     get_exists_comparator = lambda *_: (lambda _: 1)
     get_is_null_comparator = lambda *_: (lambda x: x is None)
     get_is_not_null_comparator = lambda *_: (lambda x: x is not None)
-    get_eq_comparator = lambda val: (lambda x: x == val and type(x) == type(val))
-    get_lt_comparator = lambda val: (lambda x: type(x) == type(val) and x < val)
-    get_gt_comparator = lambda val: (lambda x: type(x) == type(val) and x > val)
+    get_eq_comparator = lambda val: (lambda x: check_type(x, val) and x == val)
+    get_lt_comparator = lambda val: (lambda x: check_type(x, val) and x < val)
+    get_gt_comparator = lambda val: (lambda x: check_type(x, val) and x > val)
 
-    # TODO: We're currently retrieving (likely) different random values to test against for each stat type.
-    # This is obviously bad if we want a valid comparison. 
-    # How about pre-computing which indices to sample, or just trying every single value
-    
+
     settings_to_try = {
         "stats_type": list(StatType),
         "prune_strats": [
@@ -222,22 +225,22 @@ def run_analysis():
             [PruneStrat.UNIQUE_SUFFIX],
             [PruneStrat.MAX_PREFIX_LENGTH],
             
-            [PruneStrat.MIN_FREQ, PruneStrat.MAX_PREFIX_LENGTH],
-            [PruneStrat.MIN_FREQ, PruneStrat.UNIQUE_SUFFIX],
+            # [PruneStrat.MIN_FREQ, PruneStrat.MAX_PREFIX_LENGTH],
+            # [PruneStrat.MIN_FREQ, PruneStrat.UNIQUE_SUFFIX],
 
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        # "num_histogram_buckets": [8, 30, 100],
-        "num_histogram_buckets": [8, 30],
+        "num_histogram_buckets": [8, 30, 100],
+        # "num_histogram_buckets": [8, 30],
         # "sampling_rate": [0.0, 0.3, 0.9, 0.98],
         "sampling_rate": [0.0, 0.3, 0.9],
         "prune_params": [
-            {
-                "min_freq_threshold": 0.1,
-                "max_no_paths_threshold": 100,
-                "max_prefix_length_threshold": 3,
-            },
+            # {
+            #     "min_freq_threshold": 0.1,
+            #     "max_no_paths_threshold": 100,
+            #     "max_prefix_length_threshold": 3,
+            # },
             {
                 "min_freq_threshold": 0.01,
                 "max_no_paths_threshold": 200,
@@ -246,7 +249,7 @@ def run_analysis():
             {
                 "min_freq_threshold": 0.001,
                 "max_no_paths_threshold": 500,
-                "max_prefix_length_threshold": 4,
+                "max_prefix_length_threshold": 5,
             },
         ],
     }
@@ -261,8 +264,12 @@ def run_analysis():
             # Skip variations on histogram size if histograms arent being created
             if override_setting["stats_type"] != StatType.HISTOGRAM and override_setting["num_histogram_buckets"] != settings_to_try["num_histogram_buckets"][0]:
                 continue
-            # Skip variations of prune strategy values when no pruning strategy is active
+            # Skip variations of prune params when no pruning strategy is active
             if not override_setting["prune_strats"] and override_setting["prune_params"] != settings_to_try["prune_params"][0]:
+                continue
+
+            # Skip variations of prune params when only UNIQUE_SUFFIX is active (as it takes no params)
+            if override_setting["prune_strats"] == [PruneStrat.UNIQUE_SUFFIX] and override_setting["prune_params"] != settings_to_try["prune_params"][0]:
                 continue
 
             ### Clean up settings, removing things that don't affect the outcome  ###
@@ -270,14 +277,17 @@ def run_analysis():
             if override_setting["stats_type"] != StatType.HISTOGRAM:
                 del override_setting["num_histogram_buckets"]
 
-            if not override_setting["prune_strats"]:
+            if not override_setting["prune_strats"] or override_setting["prune_strats"] == [PruneStrat.UNIQUE_SUFFIX]:
                 del override_setting["prune_params"]
+            else:
+                if override_setting["prune_params"] and PruneStrat.MIN_FREQ not in override_setting["prune_strats"]:
+                    del override_setting["prune_params"]["min_freq_threshold"]
 
-            if override_setting["prune_strats"] and PruneStrat.MIN_FREQ not in override_setting["prune_strats"]:
-                del override_setting["prune_params"]["min_freq_threshold"]
-            
-            if override_setting["prune_strats"] and PruneStrat.MAX_NO_PATHS not in override_setting["prune_strats"]:
-                del override_setting["prune_params"]["max_no_paths_threshold"]
+                if override_setting["prune_strats"] and PruneStrat.MAX_NO_PATHS not in override_setting["prune_strats"]:
+                    del override_setting["prune_params"]["max_no_paths_threshold"]
+
+                if override_setting["prune_strats"] and PruneStrat.MAX_PREFIX_LENGTH not in override_setting["prune_strats"]:
+                    del override_setting["prune_params"]["max_prefix_length_threshold"]
 
             yield override_setting
 
@@ -285,52 +295,18 @@ def run_analysis():
     settings_generator = generate_settings_combinations()
     
     test_settings = [
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [], 
-        'num_histogram_buckets': 20,
-        'sampling_rate': 0,
+        {
+            'stats_type': StatType.NDV_HYPERLOG,
+            'prune_strats': [], 
+            'sampling_rate': 0,
+            "prune_params": {}
         },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.UNIQUE_SUFFIX], 
-        'num_histogram_buckets': 20,
-        'sampling_rate': 0,
-        },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, ], 
-        'num_histogram_buckets': 20,
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, }
-        },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.UNIQUE_SUFFIX], 
-        'num_histogram_buckets': 20,
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, }
-        },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
-        'num_histogram_buckets': 20, 
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 1},
-        },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
-        'num_histogram_buckets': 20, 
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 2},
-        },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
-        'num_histogram_buckets': 20, 
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 3},
-        },
-        {'stats_type': StatType.HISTOGRAM,
-        'prune_strats': [PruneStrat.MAX_NO_PATHS, PruneStrat.MAX_PREFIX_LENGTH], 
-        'num_histogram_buckets': 20, 
-        'sampling_rate': 0,
-        "prune_params": {"max_no_paths_threshold": 300, "max_prefix_length_threshold": 4},
-        },
+        # {
+        #     'stats_type': StatType.NDV_WITH_MODE,
+        #     'prune_strats': [], 
+        #     'sampling_rate': 0,
+        #     "prune_params": {}
+        # },
     ]
     use_test_settings = False
     if use_test_settings:
@@ -358,6 +334,7 @@ def run_analysis():
 
         err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if use_test_settings else None
 
+        t0 = time.time_ns()
         for json_path in json_paths:
             # test_vals = []
             # for key_path in filter(lambda kp: kp in key_paths, get_possible_key_paths(json_path)):
@@ -372,22 +349,23 @@ def run_analysis():
             # assert exists_ground_truth == _exists_ground_truth, (exists_ground_truth, _exists_ground_truth)
             exists_estimate = estimate_exists_cardinality(json_path_to_base_key_path(json_path=json_path))
             exists_data.append((exists_ground_truth, exists_estimate))
-            err_if_bad_est("exists", 100, exists_estimate, exists_ground_truth)
+            err_if_bad_est("exists", 200, exists_estimate, exists_ground_truth)
 
             # is null
             is_null_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_is_null_comparator())
             is_null_estimate = estimate_is_null_cardinality(json_path_to_base_key_path(json_path=json_path))
             is_null_data.append((is_null_ground_truth, is_null_estimate))
-            err_if_bad_est("is_null", 100, is_null_estimate, is_null_ground_truth)
+            err_if_bad_est("is_null", 200, is_null_estimate, is_null_ground_truth)
             
             # is not null
             is_not_null_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_is_not_null_comparator())
             is_not_null_estimate = estimate_not_null_cardinality(json_path_to_base_key_path(json_path=json_path))
             is_not_null_data.append((is_not_null_ground_truth, is_not_null_estimate))
-            err_if_bad_est("is_not_null", 100, is_not_null_estimate, is_not_null_ground_truth)
+            err_if_bad_est("is_not_null", 200, is_not_null_estimate, is_not_null_ground_truth)
 
             for val in test_vals:
-                if not isinstance(val, typing.get_args(Json_Primitive)) or val is None:
+                if not isinstance(val, typing.get_args(Json_Primitive_No_Null)):
+                    # Only test primitive non-null values
                     continue
 
                 err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, val, json_path=json_path, stats=stats, meta_stats=meta_stats) if use_test_settings else None
@@ -399,7 +377,8 @@ def run_analysis():
                 eq_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_eq_comparator(val))
                 eq_estimate = estimate_eq_cardinality(json_path_to_key_path(json_path, val), val)
                 eq_data.append((eq_ground_truth, eq_estimate))
-                err_if_bad_est("eq", 100, eq_estimate, eq_ground_truth)
+                if type(val) in (int, float):
+                    err_if_bad_est("eq", 150, eq_estimate, eq_ground_truth)
                 
 
                 # Operators below only work with numeric values
@@ -408,13 +387,13 @@ def run_analysis():
                     lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(val))
                     lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, val), val)
                     lt_data.append((lt_ground_truth, lt_estimate))
-                    err_if_bad_est("lt", 100, lt_estimate, lt_ground_truth)
+                    err_if_bad_est("lt", 150, lt_estimate, lt_ground_truth)
 
                     # greater than operator
                     gt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_gt_comparator(val))
                     gt_estimate = estimate_gt_cardinality(json_path_to_key_path(json_path, val), val)
                     gt_data.append((gt_ground_truth, gt_estimate))
-                    err_if_bad_est("gt", 100, gt_estimate, gt_ground_truth)
+                    err_if_bad_est("gt", 150, gt_estimate, gt_ground_truth)
 
                     # range
                     # But: how do we combine two vals to get a range?
@@ -422,6 +401,9 @@ def run_analysis():
 
                 # LIKE? 
                 # IN ARRAY?
+
+        t1 = time.time_ns()
+        analysis_time_taken = t1 - t0
 
 
         log()
@@ -455,7 +437,8 @@ def run_analysis():
 
 
         meta_data = {
-            "stats_size": stats_size
+            "stats_size": stats_size,
+            "time_taken": analysis_time_taken
         }
         all_results.append((override_settings, error_data, meta_data))
 
@@ -568,6 +551,7 @@ def examine_analysis_results():
 
             errors.append(err)
             stats_sizes.append(tup[2]["stats_size"])
+            # stats_sizes.append(tup[2]["time_taken"])
             stats_infos.append(tup[0])
 
         scatterplot(errors, stats_sizes, stats_infos)

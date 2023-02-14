@@ -4,6 +4,11 @@
   * JSON Tiles differentiates between floats and ints. We can solve the uncertainty of whether the key-path can lead to the other type due to examples being skipped during sampling by combining an estimate for both.
   * How do we combine those estimates? Maybe we can use the skip_threshold times the heuristic multiplier and add that to the estimate we have. 
   * If we have seen lots of one type and not enough of the other, reduce the estimate if the other is high? Because it seems less likely that we would see so few of the other type if we've seen many of this one?
+- [ ] For strings: If there are loads of strings, but a small number of them are very common, maybe make a singleton histogram for those? This will both increase accuracy for those select strings, but also for the remaining strings as their estimate will be lower. 
+  * E.g., If a key-path occurs 1k times, leading to unique 200 strings, where 5 of them occur > 100 times each, then we put those five in a special case singleton histogram. The remainder then have their estimated cardinality halved (instead of 1000/200, it becomes 500/195)
+  * Special case as in: It will have to note that values were omitted, so we don't assume cardinality 0 if a lookup value is not in the histogram.
+- [ ] Store most-common-value? For certain fields, this could be very useful? (String fields where the empty string dominates). Like with the above singleton-ish histogram, it would improve accuracy for both the common value as well as the remaining values. 
+  * Or store top-k values? Linear-ish computation. Not too expensive if we're already finding min and max, especially if we do all of them in a single pass. 
 
 
 ## UTILS / TRACKERS / LOGGER / CACHING
@@ -26,8 +31,9 @@
 - [x] Find all key-paths, both typed and untyped
 - [x] Find the value range for all key-paths
 - [x] Find some strategy for picking values to test with all key-paths
-  - [ ] Find an improved approach
+  - [ ] Find an improved approach. Maybe pick edge values, median, most common, mean (if numeric), and then some random values?
 - [x] Find some way to test various performance metrics for all key-paths with those test values
+- [ ] Allow testing against data sets of different sizes, to compare how the techniques' performance changes with different size data sets (error should go up).
 - [ ] Visualize the results
 - [ ] Analyze the result
 
@@ -37,3 +43,4 @@ Write tests for all important logic (wasting time on erroneous results sucks)
 - [x] Test all estimates with basic_ndv stats
 - [x] Test all estimates with hyperloglog stats
 - [x] Test all estimates with histogram stats
+- [ ] Test all estimates with ndv_with_mode stats

@@ -10,6 +10,7 @@ def load_data():
         with open(settings.stats.data_path) as f:
             _cache[data_fname] = json.load(f)
 
+    assert len(_cache) == 1, _cache.keys()
     return _cache[data_fname]
 
     

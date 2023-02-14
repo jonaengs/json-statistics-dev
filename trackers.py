@@ -91,7 +91,7 @@ class TimeTracker:
 
     def _print_results(self):
         log("\n" + "="*20 + "\n" + "TIMER RESULTS:\n" + "="*20)
-        for f_name, all_ts in self.records.items():
+        for f_name, all_ts in sorted(self.records.items()):
             log(f"{f_name}  ({len(all_ts)} call{'s'*(len(all_ts)>1)}):")
             
             sys_ts = list(zip(*all_ts))[0]
@@ -124,7 +124,14 @@ class TimeTracker:
             delta_system = t1_system - t0_system
             delta_program = t1_program - t0_program
 
-            self.records[func.__name__].append((delta_system, delta_program))
+            stats_type = settings.stats.stats_type
+            prune_strats = settings.stats.prune_strats
+
+            record_key = func.__name__ 
+            specific_key = record_key + f"@[{stats_type.name}]"
+            # specific_key = record_key + f"@[{stats_type.name}, {[e.name for e in prune_strats]}]"
+            self.records[record_key].append((delta_system, delta_program))
+            self.records[specific_key].append((delta_system, delta_program))
 
             return result
 

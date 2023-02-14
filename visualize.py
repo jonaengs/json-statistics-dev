@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.markers as plt_markers
 
+from compute_structures import PruneStrat
+
 def _pretty_dict_str(d):
     return "\n".join(f"{k}: {v}" for k, v in d.items())
 
@@ -37,6 +39,7 @@ def scatterplot(x, y, point_data):
     sample_ratio_to_marker_map = dict(zip(sorted(set(p["sampling_rate"] for p in point_data)), ['o', 'v', 'P', '*', 'X']))
     markers = [sample_ratio_to_marker_map[p["sampling_rate"]] for p in point_data]
     colors = [setting["stats_type"].value for setting in point_data]
+    # colors = [PruneStrat.UNIQUE_SUFFIX in setting["prune_strats"] for setting in point_data]
 
     def add_markers(scp):
         """

@@ -570,7 +570,7 @@ class TestHyperLogLog(TestBasicNDV):
     Test that estimation functions behave in the same manner when using hyperloglog as when
     computing ndv by brute force.
     """
-    STATS_TYPE = StatType.HYPERLOG
+    STATS_TYPE = StatType.NDV_HYPERLOG
 
 # TODO: Update to remove null values from typed key paths, as done in TestBasic
 class TestHistogram(unittest.TestCase):

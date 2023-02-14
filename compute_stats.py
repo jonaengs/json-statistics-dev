@@ -8,7 +8,7 @@ from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
 import struct
-from compute_structures import HistBucket, KeyStat, KeyStatEncoder, PruneStrat, StatType
+from compute_structures import HistBucket, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, StatType
 
 from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
@@ -112,7 +112,7 @@ def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, c
             return 0
 
         match STATS_TYPE:
-            case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+            case StatType.BASIC | StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
                 data_range = data.max_val - data.min_val
                 compare_range = (compare_value - 1) - data.min_val
                 overlap = compare_range / data_range
@@ -150,7 +150,7 @@ def compare_range_estimate(data_path, key_path: list[str], stats: dict, stat_pat
         data: KeyStat = stats[stat_path]
 
         match STATS_TYPE:
-            case StatType.BASIC | StatType.BASIC_NDV | StatType.HYPERLOG:
+            case StatType.BASIC | StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
                 valid_range = min(data.max_val, q_range.stop - 1) - max(data.min_val, q_range.start)
                 data_range = data.max_val - data.min_val
                 overlap = valid_range / (data_range)
@@ -195,7 +195,7 @@ def compare_eq_estimate(data_path, key_path: list[str], stats, stat_path: str, c
                     # Obviously this won't work for floats (as there are infinitely many values between whatever max and min are -- unless they are equal, of course)
                 return None
                 # assert False, "cannot estimate EQ for 
-            case StatType.BASIC_NDV | StatType.HYPERLOG:
+            case StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
                 return data.valid_count//data.ndv
 
             case StatType.HISTOGRAM:
@@ -246,8 +246,8 @@ def compute_ndv(path, accessor):
 # Note: Mutates the argument array
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr) -> list[HistBucket] | None:
-    nbins = settings.stats.num_histogram_buckets
+def compute_histogram(arr, _nbins=None) -> list[HistBucket] | None:
+    nbins = _nbins or settings.stats.num_histogram_buckets
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
@@ -310,7 +310,7 @@ def make_key_path(_parent_path, key, val)-> tuple[str, str]:
 
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> dict[str, KeyStat]:
+def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> dict[str, KeyStat]:
     """
     STATS TYPES:
     1. count, null_count. For int & float: min and max. 
@@ -321,8 +321,8 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
     4. Histograms. 
         Naive approach, so this will again require us to store all values
     """
-    STATS_TYPE = STATS_TYPE or settings.stats.stats_type
-    SAMPLING_RATE = SAMPLING_RATE or settings.stats.sampling_rate
+    STATS_TYPE = _STATS_TYPE or settings.stats.stats_type
+    SAMPLING_RATE = _SAMPLING_RATE if _SAMPLING_RATE is not None else settings.stats.sampling_rate
     HYPERLOGLOG_ERROR = settings.stats.hyperloglog_error
     MAX_PREFIX_LENGTH = settings.stats.prune_params.max_prefix_length_threshold
     
@@ -335,44 +335,48 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
                 stats[base_key_str].count += val is not None  # Change this if null values get a type suffix
                 stats[key_str].null_count += val is None
 
-                if type(val) == int or type(val) == float:
-                    stats[key_str].min_val = min(val, stats[key_str].min_val or math.inf)
-                    stats[key_str].max_val = max(val, stats[key_str].max_val or -math.inf)
+                if type(val) in (int, float, bool):
+                    stats[key_str].min_val = min(val, stats[key_str].min_val if stats[key_str].min_val is not None else math.inf)
+                    stats[key_str].max_val = max(val, stats[key_str].max_val if stats[key_str].max_val is not None else -math.inf)
 
                 return key_str
-            case StatType.BASIC_NDV | StatType.HISTOGRAM:
+            case StatType.BASIC_NDV | StatType.HISTOGRAM | StatType.NDV_WITH_MODE:
                 # stats[key] is either a list or a KeyStat object
                 key_str, base_key_str = make_key_path(parent_path, key, val)
                 
-                # Handle base_key_str here. key_str is handled differently for 
+                # Handle common base_key logic
                 if base_key_str not in stats:
                     stats[base_key_str] = KeyStat()
-                stats[base_key_str].count += val is not None  # Change this if null values get a type suffix
-
-                if type(val) in (int, float, str, bool):
-                    # Store all primitive values
+                stats[base_key_str].count += 1
+                     
+                # key_str is handled differently for non-null primitives, nulls and arrays/objects
+                if isinstance(val, Json_Primitive_No_Null):                    
+                    # Store all primitive values in a list
                     if key_str not in stats:
                         stats[key_str] = []
-
                     stats[key_str].append(val)
+                elif val == None:
+                    # Change if None get a suffix
+                    assert key_str == base_key_str
+                    stats[base_key_str].null_count += 1
                 else:
-                    # Count arrays, objects and nulls
+                    # Count arrays and objects
                     if key_str not in stats:
                         stats[key_str] = KeyStat()
 
                     stats[key_str].count += 1
-                    stats[key_str].null_count += val is None
 
                 return key_str
-
-            case StatType.HYPERLOG:
+            case StatType.NDV_HYPERLOG:
                 # Very similar to basic, but we 
                 key_str, base_key_str = make_key_path(parent_path, key, val)
                 stats[key_str].count += 1
-                stats[base_key_str].count += val is not None  # Change this if null values get a type suffix
                 stats[key_str].null_count += val is None
+                stats[base_key_str].count += val is not None  # Change this if null values get a type suffix
 
-                if type(val) in (int, float, str):
+                # Add value to HyperLogLog structure
+                # if type(val) in (int, float, str):
+                if type(val) in (int, float, str, bool):
                     if not hasattr(stats[key_str], "hll"):
                         stats[key_str].hll = HyperLogLog(HYPERLOGLOG_ERROR)
                     
@@ -382,9 +386,10 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
                     hll_val = str(val) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
                     stats[key_str].hll.add(hll_val)
 
-                    if type(val) == int or type(val) == float:
-                        stats[key_str].min_val = min(val, stats[key_str].min_val or math.inf)
-                        stats[key_str].max_val = max(val, stats[key_str].max_val or -math.inf)
+                # Record min and max values
+                if type(val) in (int, float, bool):
+                    stats[key_str].min_val = min(val, stats[key_str].min_val if stats[key_str].min_val is not None else math.inf)
+                    stats[key_str].max_val = max(val, stats[key_str].max_val if stats[key_str].max_val is not None else -math.inf)
 
                 return key_str
             case _:
@@ -394,26 +399,32 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
     stats = {
         StatType.BASIC: defaultdict(KeyStat),
         StatType.BASIC_NDV: dict(), # stats[key] is either a list or a KeyStat object
-        StatType.HYPERLOG: defaultdict(KeyStat), # stats[key] is either a list or a KeyStat object
-        StatType.HISTOGRAM: dict() # stats[key] is either a list or a KeyStat object
+        StatType.NDV_HYPERLOG: defaultdict(KeyStat), # stats[key] is either a list or a KeyStat object
+        StatType.NDV_WITH_MODE: dict(), # stats[key] is either a list or a KeyStat object
+        StatType.HISTOGRAM: dict(), # stats[key] is either a list or a KeyStat object
     }[STATS_TYPE]
 
     def traverse(doc, parent_str_path="", parent_path=tuple()):
-        if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats and len(parent_path) == MAX_PREFIX_LENGTH:
-            # Prune parent path to be max_length - 1, so max_length is reached when adding child
-            parent_path = parent_path[1:]
-            if MAX_PREFIX_LENGTH > 1:
-                type_sep = settings.stats.key_path_type_sep
-                key_sep = settings.stats.key_path_key_sep
-                re_special_chars = "^$.\|+*?{}[]()"
-                key_sep = '\\'+key_sep if key_sep in re_special_chars else key_sep
+        def get_max_prefix_pruned_parent_paths(parent_str_path, parent_path):
+            if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats and len(parent_path) == MAX_PREFIX_LENGTH:
+                # Prune parent path to be max_length - 1, so max_length is reached when adding child
+                parent_path = parent_path[1:]
+                if MAX_PREFIX_LENGTH > 1:
+                    type_sep = settings.stats.key_path_type_sep
+                    key_sep = settings.stats.key_path_key_sep
+                    re_special_chars = "^$.\|+*?{}[]()"
+                    key_sep = '\\'+key_sep if key_sep in re_special_chars else key_sep
 
-                pattern = f".+{type_sep}[A-Za-z]+{key_sep}"
-                oldest_key = next(re.finditer(pattern, parent_str_path))
-                parent_str_path = parent_str_path[len(oldest_key.group()):]
-            else:
-                parent_str_path = ""
+                    pattern = f".+{type_sep}[A-Za-z]+{key_sep}"
+                    oldest_key = next(re.finditer(pattern, parent_str_path))
+                    parent_str_path = parent_str_path[len(oldest_key.group()):]
+                else:
+                    parent_str_path = ""
 
+            return parent_str_path, parent_path
+
+
+        parent_str_path, parent_path = get_max_prefix_pruned_parent_paths(parent_str_path, parent_path)
         for key, val in (doc.items() if type(doc) == dict else enumerate(doc)):
             new_parent_str_path = record_path_stats(stats, parent_str_path, key, val)
             
@@ -426,11 +437,24 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
     for doc in collection:
         # TODO?: Should maybe be done in blocks of N docs at a time, to emulate page sampling as used in real systems
         # TODO: Is python's random faulty in any way? It should be fine for this purpose, right?
-        if (random.random() > SAMPLING_RATE):
+        if (random.random() >= SAMPLING_RATE):
             traverse(doc)
     
     global_mem_tracker.record_global_memory()
     if STATS_TYPE == StatType.BASIC_NDV:
+        # Compute KeyStat object for primitive value lists
+        for key in stats:
+            if type(stats[key]) == list:  # List means that primitive values are recorded here
+                vals = stats[key]
+                stats[key] = KeyStat(  # obvious performance improvement: Calculate these in a single pass instead of four
+                    count=len(vals),
+                    null_count=0,
+                    # Don't calculate min and max for strings
+                    min_val=min(vals) if type(vals[0]) != str else None,
+                    max_val=max(vals) if type(vals[0]) != str else None,
+                    ndv=len(set(vals))
+                )
+    elif STATS_TYPE == StatType.NDV_WITH_MODE:
         # Compute KeyStat object for primitive value lists
         for key in stats:
             if type(stats[key]) == list:
@@ -441,14 +465,18 @@ def _make_base_statistics(collection, STATS_TYPE=None, SAMPLING_RATE=None) -> di
                     # Don't calculate min and max for strings
                     min_val=min(vals) if type(vals[0]) != str else None,
                     max_val=max(vals) if type(vals[0]) != str else None,
-                    ndv=len(set(vals))
-                )  
-    elif STATS_TYPE == StatType.HYPERLOG:
+                    ndv=len(set(vals)),
+
+                    mode_info=ModeInfo(*Counter(vals).most_common(1)[0]),
+                    # Don't store mode_info for strings. Takes lots of space
+                    # mode_info=(ModeInfo(*Counter(vals).most_common(1)[0]) if type(vals[0]) != str else None),
+                )
+    elif STATS_TYPE == StatType.NDV_HYPERLOG:
         # Compute ndv estimate from hyperloglog object
-        for val in stats.values():
-            if hasattr(val, "hll"):
-                val.ndv = len(val.hll)
-                del val.hll
+        for keystat in stats.values():
+            if hasattr(keystat, "hll"):
+                keystat.ndv = len(keystat.hll)
+                del keystat.hll
     
     elif STATS_TYPE == StatType.HISTOGRAM:
         # Compute basic stats
@@ -683,19 +711,50 @@ def run():
 if __name__ == '__main__':
     # TODO: TEST Stat creation
 
-    log.__self__.silenced = True
-    print("compute tests")
     for st in StatType:
-        STATS_TYPE = st
         stats_1 = _make_base_statistics([
             {"a": 1},
-            {"a": 1},
+            {"a": 2},
             {"a": None},
-        ])
 
-        assert stats_1["a"].count == 3
-        assert stats_1["a"].null_count == 1
-        assert stats_1["a"].valid_count == 2
+            {"b": {"c": 8}},
+            {"b": {"c": -1}},
+            {"b": {"c": -5}},
+            {"b": {"c": -1}},
+            {"b": {"c": 99}},
+            {"b": {"c": -99}},
+            {"b": {"c": -99}},
+            {"b": {"c": 8}},
+            
+            # Should trigger min_val bug that hyperlog_ndv had (using 'or' instead of 'if is not null else')
+            {"d": {"e": 1}},
+            {"d": {"e": 0}},
+            {"d": {"e": 1}},
+        ], _STATS_TYPE=st, _SAMPLING_RATE=0)
+
+        assert stats_1["a"].count == 3, (st, stats_1)
+        assert stats_1["a"].null_count == 1, (st, stats_1)
+        assert stats_1["a"].valid_count == 2, (st, stats_1)
+
+        assert stats_1["a_number"].count == 2, (st, stats_1)
+        assert stats_1["a_number"].null_count == 0, (st, stats_1)
+        assert stats_1["a_number"].valid_count == 2, (st, stats_1)
+        assert stats_1["a_number"].max_val == 2, (st, stats_1)
+        assert stats_1["a_number"].min_val == 1, (st, stats_1)
+        if st != StatType.BASIC:
+            assert stats_1["a_number"].ndv == 2, (st, stats_1)
+
+        assert stats_1["b_object.c_number"].count == 8, (st, stats_1)
+        assert stats_1["b_object.c_number"].null_count == 0, (st, stats_1)
+        assert stats_1["b_object.c_number"].valid_count == 8, (st, stats_1)
+        assert stats_1["b_object.c_number"].max_val == 99, (st, stats_1)
+        assert stats_1["b_object.c_number"].min_val == -99, (st, stats_1)
+        
+        assert stats_1["d_object.e_number"].count == 3, (st, stats_1)
+        assert stats_1["d_object.e_number"].min_val == 0, (st, stats_1)
+        assert stats_1["d_object.e_number"].max_val == 1, (st, stats_1)
+        if st != StatType.BASIC:
+            assert stats_1["d_object.e_number"].ndv == 2, (st, stats_1)
 
     
     test_hist = compute_histogram(
@@ -710,7 +769,7 @@ if __name__ == '__main__':
 
         +([10]*10)\
         +([15]*20),
-        nbins=3
+        _nbins=3
     )
 
     assert test_hist == [
@@ -719,11 +778,11 @@ if __name__ == '__main__':
         (15, 30, 2)
     ]
 
-    bool_hist_1 = compute_histogram(([False]*5) + ([True]*40), nbins=2)
+    bool_hist_1 = compute_histogram(([False]*5) + ([True]*40), _nbins=2)
     bool_hist_2 = compute_histogram(([True]*40) + ([False]*5))
     assert bool_hist_1 == [(False, 5, 1), (True, 40, 1)] == bool_hist_2, (bool_hist_1, bool_hist_2)
 
-    str_hist = compute_histogram(list("aaabaaadaaabaaadx"), nbins=len("abdx"))
+    str_hist = compute_histogram(list("aaabaaadaaabaaadx"), _nbins=len("abdx"))
     assert str_hist == [("a", 12, 1), ("b", 2, 1), ("d", 2, 1), ("x", 1, 1)], str_hist
 
 
@@ -757,4 +816,4 @@ if __name__ == '__main__':
         },
     ]
 
-    print(_make_base_statistics(collection, StatType.HISTOGRAM))
+    # print(_make_base_statistics(collection, StatType.HISTOGRAM))

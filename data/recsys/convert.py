@@ -41,13 +41,26 @@ def store_json_better(path):
         out.write("[\n",)
         out.write(",".join(json_data))
         out.write("\n]")
+
+
+def create_custom_size():
+    name = "medium"
+    size = 5_000
+
+    with open("test.json") as f:
+        data = json.load(f)
+
+    with open(name + ".json", "w+") as f:
+        json.dump(data[:size], f)
+
     
 if __name__ == '__main__':
-    file_path = "" or sys.argv[1]
+    # file_path = "" or sys.argv[1]
 
     # fix_file(file_path)
     # store_json(file_path)
     
-    store_json_better(file_path)
+    # store_json_better(file_path)
+    create_custom_size()
 
 

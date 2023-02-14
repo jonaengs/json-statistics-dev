@@ -2,6 +2,7 @@ import inspect
 import shutil
 import sys
 import time
+import traceback
 import types
 import weakref
 import signal 
@@ -65,6 +66,19 @@ class Logger(metaclass=Singleton):
         self.log(dt.now(), quiet=True)
         # self.log_settings()
 
+
+        # Set custom except hook, so exceptions are logged as well
+
+        def custom_excepthook(ex_type, ex_val, ex_traceback):
+            with self.block_log(quiet=True) as block:
+                block.big_header(f"Exception: {ex_type}")
+                ex_str = "".join(traceback.format_exception(ex_type, ex_val, ex_traceback))
+                block.log(ex_str)
+
+            return sys.__excepthook__(ex_type, ex_val, ex_traceback)
+
+        sys.excepthook = custom_excepthook
+
     def log(self, *args, quiet=False, **kwargs):
         if not self.silenced and not quiet:
             print(*args, **kwargs)
@@ -95,7 +109,6 @@ class Logger(metaclass=Singleton):
             block.small_header("PROGRAM SETTINGS:")
             rec_log(settings, 0)
 
-
         # self.log("\nPROGRAM SETTINGS:", quiet=quiet)
         # self.log(quiet=quiet)
 
@@ -109,25 +122,34 @@ class Logger(metaclass=Singleton):
         except:
             pass
 
-    def block_log(self, quiet=False):
-        log = lambda *a, **k: self.log(*a, **k, quiet=quiet)
-        class T:
+    def block_log(_self, quiet=False, **kwargs):
+        _log = lambda *a, **k: _self.log(*a, **k, quiet=quiet)
+        class LogBlock:
+            def __init__(self, **kwargs):
+                self.print_footer = False
+
             def __enter__(self):
                 return self
                 
             def __exit__(self, *args):
-                log()
+                _self._flush()
+                if self.print_footer:
+                    _log("="*20 + "\n")
+                else:
+                    _log()
 
             def big_header(self, header):
-                log(f"\n{'='*20}\n{header}\n{'='*20}")
+                self.print_footer = True
+                _log("\n" + "="*20 + f"\n{header}\n" + "="*20)
+                # _log(f"\n{'='*20}\n{header}\n{'='*20}")
 
             def small_header(self, header):
-                log(f"\n{header}")
+                _log(f"\n{header}")
 
             def log(*args, **kwargs):
-                return log(*args, **kwargs)
+                _log(*args, **kwargs)
 
-        return T()
+        return LogBlock(**kwargs)
 
 
 logger = Logger()

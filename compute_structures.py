@@ -3,11 +3,18 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import json
 
+Json_Number = int | float
+Json_Null = type(None)
+Json_Primitive = Json_Number | bool | str | Json_Null
+Json_Primitive_No_Null = Json_Number | bool | str 
+Json_value = Json_Primitive | list | dict
+
 class StatType(Enum):
     BASIC = 1
     BASIC_NDV = 2
-    HYPERLOG = 3
-    HISTOGRAM = 4
+    NDV_HYPERLOG = 3
+    NDV_WITH_MODE = 4
+    HISTOGRAM = 5
 
 
 class PruneStrat(Enum):
@@ -17,6 +24,7 @@ class PruneStrat(Enum):
     UNIQUE_SUFFIX = 4
 
 HistBucket = namedtuple("HistBucket", ["upper_bound", "count", "ndv"])
+ModeInfo = namedtuple("ModeInfo", ["value", "count"])
 
 @dataclass
 class KeyStat:
@@ -26,6 +34,7 @@ class KeyStat:
     max_val: (None | int) = None
     ndv: (None | int) = None
     histogram: (None | list[HistBucket]) = None
+    mode_info: (None | ModeInfo) = None
 
     def __repr__(self) -> str:
         return str({k:v for k, v in asdict(self).items() if v is not None})
