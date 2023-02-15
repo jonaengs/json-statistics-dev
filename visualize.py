@@ -7,7 +7,13 @@ from matplotlib.text import Text
 from compute_structures import PruneStrat
 
 def _pretty_dict_str(d):
-    return "\n".join(f"{k}: {v}" for k, v in d.items())
+    def fix_enum_list(l):
+        return [e.name for e in l]
+
+    return "\n".join(
+        f"{k}: {v}" if k != "prune_strats" else f"{k}: {fix_enum_list(v)}"
+        for k, v in d.items()
+    )
 
 
 def pause_for_visuals():

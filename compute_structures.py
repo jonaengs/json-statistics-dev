@@ -22,6 +22,7 @@ class PruneStrat(Enum):
     MAX_NO_PATHS = 2
     MAX_PREFIX_LENGTH = 3
     UNIQUE_SUFFIX = 4
+    NO_TYPED_INNER_NODES = 5
 
 class HistogramType(Enum):
     EQUI_HEIGHT = 1
@@ -36,7 +37,6 @@ class EquiHeightBucket(NamedTuple):
 class SingletonBucket(NamedTuple):
     value: Json_Primitive_No_Null
     count: int
-    ndv: int
 
 class ModeInfo(NamedTuple):
     value: Json_Primitive_No_Null
@@ -44,8 +44,8 @@ class ModeInfo(NamedTuple):
 
 BucketType = EquiHeightBucket | SingletonBucket
 class Histogram(NamedTuple):
-    histogram_type: HistogramType
-    histogram_buckets: list[BucketType]
+    type: HistogramType
+    buckets: list[BucketType]
 
 @dataclass
 class KeyStat:
@@ -54,7 +54,7 @@ class KeyStat:
     min_val: (None | int) = None
     max_val: (None | int) = None
     ndv: (None | int) = None
-    histogram: (None | list[EquiHeightBucket]) = None
+    histogram: (None | Histogram) = None
     mode_info: (None | ModeInfo) = None
 
     def __repr__(self) -> str:

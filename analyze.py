@@ -173,17 +173,19 @@ def run_analysis():
 
     
     # We could also simply store values to test against, rather than indexes to those values
-    N_TEST_VALUES = 50
-    # seed = random.randrange(0, sys.maxsize)
-    seed = 1273304722126503270
+    N_TEST_VALUES = 10
+    seed = random.randrange(0, sys.maxsize)
+    # seed = 1273304722126503270
     random.seed(seed)
     log("random seed:", seed)
     json_path_to_test_values = {
         # Not perfect. maybe try making arr into set before sampling. May require len(arr) adjustment
-        path: list(set([e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if isinstance(e, Json_Primitive_No_Null)]))
+        path: random.sample(valid_arr, k=min(N_TEST_VALUES, len(valid_arr))) if valid_arr else []
+        # path: list(set([e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if isinstance(e, Json_Primitive_No_Null)]))
         # path: [e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
         # path: random.choices(set(arr), k=min(N_TEST_VALUES, len(set(arr))))
         for path, arr in json_path_values.items()
+        if (valid_arr := list(set(e for e in arr if isinstance(e, Json_Primitive_No_Null)))) is not None
     }
 
 
@@ -219,19 +221,21 @@ def run_analysis():
     settings_to_try = {
         "stats_type": list(StatType),
         "prune_strats": [
-            [],
-            [PruneStrat.MIN_FREQ],
+            # [],
+            [PruneStrat.MAX_NO_PATHS, PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
             [PruneStrat.MAX_NO_PATHS],
-            [PruneStrat.UNIQUE_SUFFIX],
+            [PruneStrat.MIN_FREQ],
             [PruneStrat.MAX_PREFIX_LENGTH],
+            [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
             
-            [PruneStrat.MAX_NO_PATHS, PruneStrat.UNIQUE_SUFFIX],
 
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        "num_histogram_buckets": [8, 30, 100],
+        # "num_histogram_buckets": [8, 30, 100],
+        "num_histogram_buckets": [10, 50],
         "sampling_rate": [0.0, 0.9, 0.98],
+        # "sampling_rate": [0.0],
         "prune_params": [
             {
                 "min_freq_threshold": 0.01,
@@ -294,13 +298,20 @@ def run_analysis():
             "prune_params": {}
         },
         {
-            'stats_type': StatType.NDV_WITH_MODE,
-            'prune_strats': [], 
+            'stats_type': StatType.NDV_HYPERLOG,
+            'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES], 
             'sampling_rate': 0,
             "prune_params": {}
         },
+        # {
+        #     'stats_type': StatType.NDV_WITH_MODE,
+        #     'prune_strats': [], 
+        #     'sampling_rate': 0,
+        #     "prune_params": {}
+        # },
     ]
     use_test_settings = False
+    print_high_errors = False
     if use_test_settings:
         settings_generator = test_settings
     
@@ -324,7 +335,7 @@ def run_analysis():
         lt_data = []
         gt_data = []
 
-        err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if use_test_settings else None
+        err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
         t0 = time.time_ns()
         for json_path in json_paths:
@@ -360,7 +371,7 @@ def run_analysis():
                     # Only test primitive non-null values
                     continue
 
-                err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, val, json_path=json_path, stats=stats, meta_stats=meta_stats) if use_test_settings else None
+                err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, val, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
                 # When a query is made, we find the type of the constant that's being compared against
                 # We do the same thing here to find the correct key-path

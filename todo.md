@@ -11,6 +11,7 @@
   - [ ] Or store top-k values? Linear-ish computation. Not too expensive if we're already finding min and max, especially if we do all of them in a single pass. 
 - [ ] Identify date strings?
 - [ ] Handle lists of enums
+- [ ] Make random happen once at the start of the program, so sampling etc. is also deterministic
 
 
 ## UTILS / TRACKERS / LOGGER / CACHING
@@ -22,6 +23,7 @@
 - [x] Support for selecting and combining multiple strategies + doing so with cmd args.
 - [x] Implement and prefix key path pruning
 - [x] Make something that can use statistics with (suffix/prefix)-pruned key paths
+- [ ] Prune typed inner nodes (i.e., all object/array nodes)
 
 ## STATS
 - [x] Find some way to test for "key-path type confusion"

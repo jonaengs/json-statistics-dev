@@ -1,7 +1,7 @@
 import math
 from compute_stats import get_statistics
 
-from compute_structures import EquiHeightBucket, KeyStat, PruneStrat, StatType
+from compute_structures import EquiHeightBucket, HistogramType, KeyStat, PruneStrat, StatType
 
 from settings import settings
 from trackers import time_tracker
@@ -197,24 +197,28 @@ def estimate_gt_cardinality(stat_path: str, gt_value: float|int):
             estimate = (overlap * data.valid_count) + mode_modifier
             return max(estimate, gt_value < data.max_val)  # Return at least 1 if compare value is valid
         case StatType.HISTOGRAM:
-            estimate = 0
-            bucket_lower_bound = data.min_val
-            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
-                if bucket_lower_bound > gt_value:
-                    estimate += bucket.count
-                elif bucket.upper_bound > gt_value:
-                    if bucket.ndv == 1:
-                        # Bucket contains only a single value: the upper bound. 
-                        # Because the upper_bound >= compare_val, the entire bucket
-                        # satisfies the gt predicate
-                        estimate += bucket.count
-                    else:
-                        bucket_range = bucket.upper_bound - bucket_lower_bound
-                        valid_value_range = bucket.upper_bound - gt_value
-                        overlap = valid_value_range / bucket_range
-                        estimate += bucket.count * overlap
+            match data.histogram.type:
+                case HistogramType.EQUI_HEIGHT:
+                    estimate = 0
+                    bucket_lower_bound = data.min_val
+                    for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram.buckets):
+                        if bucket_lower_bound > gt_value:
+                            estimate += bucket.count
+                        elif bucket.upper_bound > gt_value:
+                            if bucket.ndv == 1:
+                                estimate += bucket.count  # Upper_bound must be single value in bucket
+                            else:
+                                bucket_range = bucket.upper_bound - bucket_lower_bound
+                                valid_value_range = bucket.upper_bound - gt_value
+                                overlap = valid_value_range / bucket_range
+                                estimate += bucket.count * overlap
 
-                bucket_lower_bound = bucket.upper_bound
+                        bucket_lower_bound = bucket.upper_bound
+                case HistogramType.SINGLETON:
+                    estimate = 0
+                    for bucket in data.histogram.buckets:
+                        if bucket.value > gt_value:
+                            estimate += bucket.count
 
             return estimate
 
@@ -230,7 +234,7 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
         est_card = meta_stats["highest_count_skipped"]
         return est_card * INEQ_MULTIPLIER 
 
-    data = stats[stat_path]
+    data: KeyStat = stats[stat_path]
     if lt_value <= data.min_val or data.max_val == data.min_val:
         return 0
 
@@ -269,27 +273,34 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
         case StatType.HISTOGRAM:
             # NOTE: Assumed bucket structure [upper_bound, val_count, ndv]
 
-            estimate = 0
-            bucket_lower_bound = data.min_val
-            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
-                if bucket.upper_bound < lt_value:
-                    estimate += bucket.count
-                elif bucket.upper_bound >= lt_value:
-                    if bucket.ndv == 1:  
-                        # Bucket contains only a single value: the upper bound. 
-                        # Because the upper_bound >= compare_val, the bucket doesn't satisfy the predicate
-                        # and should not be counted
-                        continue
-                    else:
-                        bucket_range = bucket.upper_bound - bucket_lower_bound
-                        valid_value_range = lt_value - bucket_lower_bound
-                        overlap = valid_value_range / bucket_range
-                        estimate += bucket.count * overlap
+            match data.histogram.type:
+                case HistogramType.EQUI_HEIGHT:
+                    estimate = 0
+                    bucket_lower_bound = data.min_val
+                    for bucket in data.histogram.buckets:
+                        if bucket.upper_bound < lt_value:
+                            estimate += bucket.count
+                        elif bucket.upper_bound >= lt_value:
+                            # Bucket contains only a single value: the upper bound. 
+                            # Because the upper_bound >= compare_val, the bucket doesn't satisfy the predicate
+                            # and should not be counted
+                            if bucket.ndv > 1:  
+                                bucket_range = bucket.upper_bound - bucket_lower_bound
+                                valid_value_range = lt_value - bucket_lower_bound
+                                overlap = valid_value_range / bucket_range
+                                estimate += bucket.count * overlap
 
-                    # No more buckets will satisfy lt pred, so stop here
-                    break
+                            # No more buckets will satisfy lt pred, so stop here
+                            break
 
-                bucket_lower_bound = bucket.upper_bound
+                        bucket_lower_bound = bucket.upper_bound
+                case HistogramType.SINGLETON:
+                    estimate = 0
+                    for bucket in data.histogram.buckets:
+                        if bucket.value < lt_value:
+                            estimate += bucket.count
+                        else:
+                            break
 
 
             return estimate
@@ -321,9 +332,11 @@ def estimate_range_cardinality(stat_path: str, q_range: range):
             return overlap * data.valid_count
 
         case StatType.HISTOGRAM:
+            assert data.histogram.type == HistogramType.EQUI_HEIGHT
+
             estimate = 0
             bucket_lower_bound = data.min_val
-            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
+            for bucket in data.histogram.buckets:
                 overlapping_range = min(bucket.upper_bound, q_range.stop) - max(bucket_lower_bound, q_range.start)
                 overlapping_range = max(overlapping_range, 0)
                 bucket_range = bucket.upper_bound - bucket_lower_bound
@@ -377,21 +390,25 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
             estimate = (data.valid_count - mode_count) / (data.ndv - 1)
             return estimate
         case StatType.HISTOGRAM:
-            # Check for string singleton histograms
-            if type(compare_value) == str:
-                if data.histogram:
-                    return next((b.count for b in data.histogram if b.upper_bound == compare_value), 0)
-                else:
-                    # No histogram data collected. Fall back to ndv
-                    return data.valid_count/data.ndv
+            if not data.histogram:
+                # No histogram data collected. Fall back to ndv
+                return data.valid_count/data.ndv
 
-            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
-                if bucket.upper_bound >= compare_value:
-                    # Assume uniform distribution, so return count divided by ndv
-                    return bucket.count / bucket.ndv
+            match data.histogram.type:
+                case HistogramType.SINGLETON:
+                    return next((b.count for b in data.histogram.buckets if b.value == compare_value), 0)
 
-            # If we went past all buckets and never found anything with our value, estimate is 0
-            return 0
+                case HistogramType.EQUI_HEIGHT:
+                    for bucket in data.histogram.buckets:
+                        if bucket.upper_bound >= compare_value:
+                            # Assume uniform distribution, so return count divided by ndv
+                            return bucket.count / bucket.ndv
+
+                    # If we went past all buckets and never found anything with our value, estimate is 0
+                    return 0
+                
+                case _:
+                    assert False, f"MISSING CASE FOR: {data.histogram.type}"
 
         case _:
             assert False, f"MISSING CASE FOR: {STATS_TYPE}"

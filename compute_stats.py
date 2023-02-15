@@ -1,3 +1,4 @@
+from copy import copy
 import json
 from collections import Counter, defaultdict, namedtuple
 import math
@@ -8,7 +9,7 @@ from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
 import struct
-from compute_structures import EquiHeightBucket, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, StatType
+from compute_structures import EquiHeightBucket, Histogram, HistogramType, Json_Number, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, SingletonBucket, StatType
 
 from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
@@ -246,26 +247,53 @@ def compute_ndv(path, accessor):
 # Note: Mutates the argument array
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr, _nbins=None) -> list[EquiHeightBucket] | None:
+def compute_histogram(arr, _nbins=None) -> Histogram | None:
     nbins = _nbins or settings.stats.num_histogram_buckets
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
+    USE_SPECIAL_SINGLETON = False
+
     # Try to create singleton-ish histogram if possible
     # Make sure to check after sorting the array to get a sorted histogram
     if len(set(arr)) <= nbins:
-        return [EquiHeightBucket(v, c, 1) for v,c in Counter(arr).items()]
-    elif type(arr[0]) == str:
-        # Cannot make non-singleton string histograms
+        return Histogram(
+            HistogramType.SINGLETON,
+            [SingletonBucket(v, c) for v, c in Counter(arr).items()]
+        )
+    # elif isinstance(arr[0], str) and len(arr) > SOME_THRESHOLD=(C * _nbins):
+    elif isinstance(arr[0], str) and USE_SPECIAL_SINGLETON:
+        arr_counts = Counter(arr).most_common()
+        arr_len = len(arr)
+        freq_threshold = 2 * (1/nbins)
+
+        above_threshold = [(v, c) for v, c in arr_counts if c/arr_len >= freq_threshold]
+        if not above_threshold:
+            return None
+
+        combined_count = sum(c for v, c in above_threshold)
+        
+        remainder_bucket = EquiHeightBucket(
+            None,
+            arr_len - combined_count,
+            len(arr_counts) - len(above_threshold)
+        )
+        return Histogram(
+            HistogramType.SINGLETON_PLUS,
+            [SingletonBucket(v, c) for v,c in above_threshold] + [remainder_bucket]
+        )
+    
+    # Can only make equi-height histograms for numeric types
+    if not isinstance(arr[0], Json_Number):
         return None
 
-    histogram = []
+    histogram_buckets = []
     counter = 1
     prev_el = arr[0]
     bucket = [prev_el]
     for el in arr[1:]:
         if counter >= min_bucket_size and el != prev_el:
-            histogram.append(
+            histogram_buckets.append(
                 EquiHeightBucket(prev_el, len(bucket), len(set(bucket)))
             )
             bucket = [el]
@@ -276,11 +304,14 @@ def compute_histogram(arr, _nbins=None) -> list[EquiHeightBucket] | None:
 
         prev_el = el
 
-    histogram.append(
+    histogram_buckets.append(
         EquiHeightBucket(prev_el, len(bucket), len(set(bucket)))
     )
 
-    return histogram
+    return Histogram(
+        HistogramType.EQUI_HEIGHT, 
+        histogram_buckets
+    )
 
 type_suffixes = {
     list: "array",
@@ -524,7 +555,13 @@ def make_statistics(collection) -> list[dict, dict]:
             if path_stats.count > min_count_threshold:
                 pruned_path_stats[key_path] = path_stats
     else:
-        pruned_path_stats = base_stats
+        pruned_path_stats = copy(base_stats)
+
+    if PruneStrat.NO_TYPED_INNER_NODES in settings.stats.prune_strats:
+        typed_inner_node_suffixes = [type_suffixes[list], type_suffixes[dict]]
+        for key in [k for k in pruned_path_stats.keys()]:
+            if any(key.endswith(suffix) for suffix in typed_inner_node_suffixes):
+                del pruned_path_stats[key]
 
     max_count_excluded = None
     if PruneStrat.MAX_NO_PATHS in settings.stats.prune_strats:
@@ -532,7 +569,8 @@ def make_statistics(collection) -> list[dict, dict]:
             log("Performing max_no_paths pruning...")
             sorted_by_count = list(sorted(pruned_path_stats.items(), key=lambda t: t[1].count, reverse=True))
             pruned_path_stats = dict(sorted_by_count[:MAX_NUM_PATHS])
-            max_count_excluded = sorted_by_count[MAX_NUM_PATHS+1][1].count
+            log(len(sorted_by_count), MAX_NUM_PATHS+1)
+            max_count_excluded = sorted_by_count[MAX_NUM_PATHS][1].count
 
     if PruneStrat.UNIQUE_SUFFIX in settings.stats.prune_strats:
         approach = 2
@@ -542,7 +580,7 @@ def make_statistics(collection) -> list[dict, dict]:
 
         # Sort key paths, so that similar key_paths (e.g., array indices) come straight after one another
         # This will also make base paths appear before their typed counterparts
-        all_key_paths = list(sorted(k for k in base_stats.keys()))
+        all_key_paths = list(sorted(k for k in pruned_path_stats.keys()))
 
 
         # Approach 1:
@@ -564,13 +602,13 @@ def make_statistics(collection) -> list[dict, dict]:
                 for key in key_path.split(key_sep)[1::-1]:
                     reduced_path = f"{key}.{reduced_path}" if reduced_path else key
                     
-                    if reduced_path not in base_stats:
+                    if reduced_path not in pruned_path_stats:
                         # Test that we can move the base path as well
                         # ...
                         
                         # We've found a unique, shortened version of the key-path
-                        base_stats[reduced_path] = base_stats[key_path]
-                        del base_stats[key_path]
+                        pruned_path_stats[reduced_path] = pruned_path_stats[key_path]
+                        del pruned_path_stats[key_path]
                         
                         break
 
@@ -591,15 +629,13 @@ def make_statistics(collection) -> list[dict, dict]:
                     ]
 
                     if not any(collisions):
-                        base_stats[reduced_path] = base_stats[key_path]
-                        del base_stats[key_path]
+                        pruned_path_stats[reduced_path] = pruned_path_stats[key_path]
+                        del pruned_path_stats[key_path]
                         break
 
         
         else:
             assert False
-
-
 
     
     num_pruned = len(base_stats) - len(pruned_path_stats)
@@ -610,6 +646,8 @@ def make_statistics(collection) -> list[dict, dict]:
         "collection_size": len(collection),
         "stats_type": STATS_TYPE,
         "sampling_rate": SAMPLING_RATE,
+        "unique_key_paths_found": len(base_stats),
+        "unique_key_paths_stored": len(pruned_path_stats)
     } | ({
         "max_prefix_length": MAX_PREFIX_LENGTH
     } if PruneStrat.MAX_PREFIX_LENGTH in settings.stats.prune_strats else {})
