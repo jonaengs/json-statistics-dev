@@ -7,8 +7,10 @@
 - [ ] For strings: If there are loads of strings, but a small number of them are very common, maybe make a singleton histogram for those? This will both increase accuracy for those select strings, but also for the remaining strings as their estimate will be lower. 
   * E.g., If a key-path occurs 1k times, leading to unique 200 strings, where 5 of them occur > 100 times each, then we put those five in a special case singleton histogram. The remainder then have their estimated cardinality halved (instead of 1000/200, it becomes 500/195)
   * Special case as in: It will have to note that values were omitted, so we don't assume cardinality 0 if a lookup value is not in the histogram.
-- [ ] Store most-common-value? For certain fields, this could be very useful? (String fields where the empty string dominates). Like with the above singleton-ish histogram, it would improve accuracy for both the common value as well as the remaining values. 
-  * Or store top-k values? Linear-ish computation. Not too expensive if we're already finding min and max, especially if we do all of them in a single pass. 
+- [x] Store most-common-value? For certain fields, this could be very useful? (String fields where the empty string dominates). Like with the above singleton-ish histogram, it would improve accuracy for both the common value as well as the remaining values. 
+  - [ ] Or store top-k values? Linear-ish computation. Not too expensive if we're already finding min and max, especially if we do all of them in a single pass. 
+- [ ] Identify date strings?
+- [ ] Handle lists of enums
 
 
 ## UTILS / TRACKERS / LOGGER / CACHING

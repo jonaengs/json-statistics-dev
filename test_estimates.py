@@ -2,7 +2,7 @@ import math
 import unittest
 from compute_stats import compute_histogram
 
-from compute_structures import HistBucket, KeyStat, StatType
+from compute_structures import EquiHeightBucket, KeyStat, StatType
 from use_stats import _update_stats_info, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality, estimate_range_cardinality
 
 # Find and replace assert with assertEquals method:
@@ -585,9 +585,9 @@ class TestHistogram(unittest.TestCase):
                     max_val=15,
                     histogram= [
                         # Upper bound, count, ndv
-                        HistBucket(5, 49, 4),
-                        HistBucket(9, 41, 3),
-                        HistBucket(15, 30, 2)
+                        EquiHeightBucket(5, 49, 4),
+                        EquiHeightBucket(9, 41, 3),
+                        EquiHeightBucket(15, 30, 2)
                     ]                
                 )
             }, 
@@ -670,10 +670,10 @@ class TestHistogram(unittest.TestCase):
                     max_val=10000,
                     histogram=[
                         # Upper bound, count, ndv
-                        HistBucket(-0.5, 40, 1),
-                        HistBucket(5.5, 20, 1),
-                        HistBucket(10, 40, 1),
-                        HistBucket(10000, 40, 1),
+                        EquiHeightBucket(-0.5, 40, 1),
+                        EquiHeightBucket(5.5, 20, 1),
+                        EquiHeightBucket(10, 40, 1),
+                        EquiHeightBucket(10000, 40, 1),
                     ]                
                 )
             }, 
@@ -757,7 +757,7 @@ class TestHistogram(unittest.TestCase):
                     null_count=20,
                     min_val=False,
                     max_val=True,
-                    histogram=[HistBucket(False, 5, 1), HistBucket(True, 75, 1)]
+                    histogram=[EquiHeightBucket(False, 5, 1), EquiHeightBucket(True, 75, 1)]
                 )
             },
             _meta_stats={
@@ -783,9 +783,9 @@ class TestHistogram(unittest.TestCase):
                     null_count=5,
                     min_val="",
                     max_val="zzzzz",
-                    histogram=[HistBucket("", 5, 1), HistBucket("abc", 75, 1), 
-                        HistBucket("abcc", 1, 1), HistBucket("zabc", 2, 1), 
-                        HistBucket("zz", 2, 1), HistBucket("zzzzz", 10, 1)]
+                    histogram=[EquiHeightBucket("", 5, 1), EquiHeightBucket("abc", 75, 1), 
+                        EquiHeightBucket("abcc", 1, 1), EquiHeightBucket("zabc", 2, 1), 
+                        EquiHeightBucket("zz", 2, 1), EquiHeightBucket("zzzzz", 10, 1)]
                 )
             },
             _meta_stats={
@@ -875,9 +875,9 @@ class TestHistogram(unittest.TestCase):
                     max_val=15,
                     histogram= [
                         # Upper bound, count, ndv
-                        HistBucket(5, 49, 4),
-                        HistBucket(9, 41, 3),
-                        HistBucket(15, 30, 2)
+                        EquiHeightBucket(5, 49, 4),
+                        EquiHeightBucket(9, 41, 3),
+                        EquiHeightBucket(15, 30, 2)
                     ]                
                 )
             }, 

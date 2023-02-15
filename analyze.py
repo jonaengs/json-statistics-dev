@@ -225,22 +225,14 @@ def run_analysis():
             [PruneStrat.UNIQUE_SUFFIX],
             [PruneStrat.MAX_PREFIX_LENGTH],
             
-            # [PruneStrat.MIN_FREQ, PruneStrat.MAX_PREFIX_LENGTH],
-            # [PruneStrat.MIN_FREQ, PruneStrat.UNIQUE_SUFFIX],
+            [PruneStrat.MAX_NO_PATHS, PruneStrat.UNIQUE_SUFFIX],
 
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
         "num_histogram_buckets": [8, 30, 100],
-        # "num_histogram_buckets": [8, 30],
-        # "sampling_rate": [0.0, 0.3, 0.9, 0.98],
-        "sampling_rate": [0.0, 0.3, 0.9],
+        "sampling_rate": [0.0, 0.9, 0.98],
         "prune_params": [
-            # {
-            #     "min_freq_threshold": 0.1,
-            #     "max_no_paths_threshold": 100,
-            #     "max_prefix_length_threshold": 3,
-            # },
             {
                 "min_freq_threshold": 0.01,
                 "max_no_paths_threshold": 200,
@@ -301,12 +293,12 @@ def run_analysis():
             'sampling_rate': 0,
             "prune_params": {}
         },
-        # {
-        #     'stats_type': StatType.NDV_WITH_MODE,
-        #     'prune_strats': [], 
-        #     'sampling_rate': 0,
-        #     "prune_params": {}
-        # },
+        {
+            'stats_type': StatType.NDV_WITH_MODE,
+            'prune_strats': [], 
+            'sampling_rate': 0,
+            "prune_params": {}
+        },
     ]
     use_test_settings = False
     if use_test_settings:
@@ -451,6 +443,10 @@ def run_analysis():
 
 @time_tracker.record_time_used
 def analyze_data(arr: list[tuple[int, int]]):
+    if not arr:
+        log("No values to analyze")
+        return []
+
     error_percent = [calc_error(tru, est) for tru, est in arr]
 
     sorted_errors = sorted(error_percent)
@@ -546,8 +542,28 @@ def examine_analysis_results():
 
         errors, stats_sizes, stats_infos = [], [], []
         for tup in data:
-            err_data = tup[1]["eq"]
-            err = sum(err_data) / len(err_data)
+
+            all_mean_errs = [
+                sum(err_arr) / (len(err_arr) or 1)
+                for err_arr in tup[1].values()
+            ]
+            num_empty_arrs = sum(not err_arr for err_arr in tup[1].values())
+            mean_err = sum(all_mean_errs) / (len(all_mean_errs) - num_empty_arrs)
+                
+            eq_err_data = tup[1]["eq"]
+            eq_err = sum(eq_err_data) / len(eq_err_data)
+
+            # lt_err_data = tup[1]["lt"]
+            # lt_err = sum(lt_err_data) / len(lt_err_data)
+
+            # gt_err_data = tup[1]["gt"]
+            # gt_err = sum(gt_err_data) / len(gt_err_data)
+
+            # err = (eq_err + lt_err + gt_err) / 3
+
+            # err = eq_err
+            err = mean_err
+
 
             errors.append(err)
             stats_sizes.append(tup[2]["stats_size"])

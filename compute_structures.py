@@ -1,4 +1,4 @@
-from collections import namedtuple
+from typing import Any, NamedTuple
 from dataclasses import asdict, dataclass
 from enum import Enum
 import json
@@ -23,8 +23,29 @@ class PruneStrat(Enum):
     MAX_PREFIX_LENGTH = 3
     UNIQUE_SUFFIX = 4
 
-HistBucket = namedtuple("HistBucket", ["upper_bound", "count", "ndv"])
-ModeInfo = namedtuple("ModeInfo", ["value", "count"])
+class HistogramType(Enum):
+    EQUI_HEIGHT = 1
+    SINGLETON = 2
+    SINGLETON_PLUS = 3
+
+class EquiHeightBucket(NamedTuple):
+    upper_bound: Json_Number
+    count: int
+    ndv: int
+
+class SingletonBucket(NamedTuple):
+    value: Json_Primitive_No_Null
+    count: int
+    ndv: int
+
+class ModeInfo(NamedTuple):
+    value: Json_Primitive_No_Null
+    count: int
+
+BucketType = EquiHeightBucket | SingletonBucket
+class Histogram(NamedTuple):
+    histogram_type: HistogramType
+    histogram_buckets: list[BucketType]
 
 @dataclass
 class KeyStat:
@@ -33,7 +54,7 @@ class KeyStat:
     min_val: (None | int) = None
     max_val: (None | int) = None
     ndv: (None | int) = None
-    histogram: (None | list[HistBucket]) = None
+    histogram: (None | list[EquiHeightBucket]) = None
     mode_info: (None | ModeInfo) = None
 
     def __repr__(self) -> str:

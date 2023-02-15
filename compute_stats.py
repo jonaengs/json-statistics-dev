@@ -8,7 +8,7 @@ from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
 import struct
-from compute_structures import HistBucket, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, StatType
+from compute_structures import EquiHeightBucket, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, StatType
 
 from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
@@ -123,7 +123,7 @@ def compare_lt_estimate(data_path, key_path: list[str], stats, stat_path: str, c
 
                 estimate = 0
                 bucket_lower_bound = data.min_val
-                for bucket in map(lambda b: HistBucket(*b), data.histogram):
+                for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
                     if bucket.upper_bound < compare_value:
                         estimate += bucket.count
                     elif bucket.upper_bound >= compare_value:
@@ -162,7 +162,7 @@ def compare_range_estimate(data_path, key_path: list[str], stats: dict, stat_pat
 
                 estimate = 0
                 bucket_lower_bound = data.min_val
-                for bucket in map(lambda b: HistBucket(*b), data.histogram):
+                for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
                     valid_range = min(bucket.upper_bound, q_range.stop - 1) - max(bucket_lower_bound, q_range.start)
                     bucket_range = bucket.upper_bound - bucket_lower_bound
                     overlap = valid_range / bucket_range
@@ -246,7 +246,7 @@ def compute_ndv(path, accessor):
 # Note: Mutates the argument array
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def compute_histogram(arr, _nbins=None) -> list[HistBucket] | None:
+def compute_histogram(arr, _nbins=None) -> list[EquiHeightBucket] | None:
     nbins = _nbins or settings.stats.num_histogram_buckets
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
@@ -254,7 +254,7 @@ def compute_histogram(arr, _nbins=None) -> list[HistBucket] | None:
     # Try to create singleton-ish histogram if possible
     # Make sure to check after sorting the array to get a sorted histogram
     if len(set(arr)) <= nbins:
-        return [HistBucket(v, c, 1) for v,c in Counter(arr).items()]
+        return [EquiHeightBucket(v, c, 1) for v,c in Counter(arr).items()]
     elif type(arr[0]) == str:
         # Cannot make non-singleton string histograms
         return None
@@ -266,7 +266,7 @@ def compute_histogram(arr, _nbins=None) -> list[HistBucket] | None:
     for el in arr[1:]:
         if counter >= min_bucket_size and el != prev_el:
             histogram.append(
-                HistBucket(prev_el, len(bucket), len(set(bucket)))
+                EquiHeightBucket(prev_el, len(bucket), len(set(bucket)))
             )
             bucket = [el]
             counter = 1
@@ -277,7 +277,7 @@ def compute_histogram(arr, _nbins=None) -> list[HistBucket] | None:
         prev_el = el
 
     histogram.append(
-        HistBucket(prev_el, len(bucket), len(set(bucket)))
+        EquiHeightBucket(prev_el, len(bucket), len(set(bucket)))
     )
 
     return histogram

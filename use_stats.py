@@ -1,7 +1,7 @@
 import math
 from compute_stats import get_statistics
 
-from compute_structures import HistBucket, KeyStat, PruneStrat, StatType
+from compute_structures import EquiHeightBucket, KeyStat, PruneStrat, StatType
 
 from settings import settings
 from trackers import time_tracker
@@ -199,7 +199,7 @@ def estimate_gt_cardinality(stat_path: str, gt_value: float|int):
         case StatType.HISTOGRAM:
             estimate = 0
             bucket_lower_bound = data.min_val
-            for bucket in map(lambda b: HistBucket(*b), data.histogram):
+            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
                 if bucket_lower_bound > gt_value:
                     estimate += bucket.count
                 elif bucket.upper_bound > gt_value:
@@ -271,7 +271,7 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
 
             estimate = 0
             bucket_lower_bound = data.min_val
-            for bucket in map(lambda b: HistBucket(*b), data.histogram):
+            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
                 if bucket.upper_bound < lt_value:
                     estimate += bucket.count
                 elif bucket.upper_bound >= lt_value:
@@ -323,7 +323,7 @@ def estimate_range_cardinality(stat_path: str, q_range: range):
         case StatType.HISTOGRAM:
             estimate = 0
             bucket_lower_bound = data.min_val
-            for bucket in map(lambda b: HistBucket(*b), data.histogram):
+            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
                 overlapping_range = min(bucket.upper_bound, q_range.stop) - max(bucket_lower_bound, q_range.start)
                 overlapping_range = max(overlapping_range, 0)
                 bucket_range = bucket.upper_bound - bucket_lower_bound
@@ -385,7 +385,7 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
                     # No histogram data collected. Fall back to ndv
                     return data.valid_count/data.ndv
 
-            for bucket in map(lambda b: HistBucket(*b), data.histogram):
+            for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram):
                 if bucket.upper_bound >= compare_value:
                     # Assume uniform distribution, so return count divided by ndv
                     return bucket.count / bucket.ndv

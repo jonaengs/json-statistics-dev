@@ -21,8 +21,11 @@ class EnumAction(argparse.Action):
         return lambda *a, **k: EnumAction(enum, *a, **k)
 
 
-def update_settings(namespace: argparse.Namespace):
+def update_settings(namespace: argparse.Namespace, exclude_list=[]):
     for path, value in vars(namespace).items():
+        if path in exclude_list:
+            continue
+
         if value is not None:
             keys = path.split(".")
 
@@ -37,16 +40,21 @@ def update_settings(namespace: argparse.Namespace):
 if __name__ == '__main__':
     # NOTE: Take care to update settings before importing any other files!
     parser = argparse.ArgumentParser()
-    
+
+    # Arguments that touch settings
     parser.add_argument("stats.filename", nargs="?", help="name of file to use as data src (training or test)")
+    parser.add_argument("-d", "--data-dir", dest="stats.data_dir")
     parser.add_argument("-q", "--quiet", dest="logger.silenced", action="store_true", help="stop logger printing to stdout")
     parser.add_argument("-n", "--new", dest="stats.force_new", action="store_true", help="Force creation of fresh statistics")
-    parser.add_argument("-s", "--stats_type", dest="stats.stats_type", choices=(StatType._member_names_), action=EnumAction.create(StatType))
-    parser.add_argument("-p", "--prune_strats", dest="stats.prune_strats", choices=(PruneStrat._member_names_), nargs="*", action=EnumAction.create(PruneStrat))
-    
-    args = parser.parse_args()    
-    update_settings(args)
-    
+    parser.add_argument("-s", "--stats_type", dest="stats.stats_type", choices=StatType._member_names_, action=EnumAction.create(StatType))
+    parser.add_argument("-p", "--prune_strats", dest="stats.prune_strats", choices=PruneStrat._member_names_, nargs="*", action=EnumAction.create(PruneStrat))
+
+    # Arguments that don't touch settings
+    parser.add_argument("-m", "--mode", choices=["a", "v"], nargs="*", help="Which path to execute. Can do multiple. Separate with space.", default=[])
+
+    args = parser.parse_args()
+    update_settings(args, exclude_list=["mode"])
+
     settings.logger.store_output = True
     import logger
     logger.log(" ".join(sys.argv), quiet=True)
@@ -57,5 +65,7 @@ if __name__ == '__main__':
     # compute_stats.run()
 
     import analyze
-    analyze.run_analysis()
-    # analyze.examine_analysis_results()
+    if not args.mode or "a" in args.mode:
+        analyze.run_analysis()
+    if "v" in args.mode:
+        analyze.examine_analysis_results()
