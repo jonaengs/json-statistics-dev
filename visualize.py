@@ -1,6 +1,8 @@
+from matplotlib import cbook
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.markers as plt_markers
+from matplotlib.text import Text
 
 from compute_structures import PruneStrat
 
@@ -52,20 +54,71 @@ def scatterplot(x, y, point_data):
         ]
         scp.set_paths(paths)
 
-    def update_annotation(hover_target_idx):
+    def get_true_annotation_extent(annotation):
+        """
+        AFAICT, all annotation and Text(annotation) methods that calculate extent
+        return a unit bounding box (0, 0, 1, 1) whenever the annotation
+        is out of bounds in any way. This makes them absolutely useless 
+        for my case. 
+
+        This function should always return the size of the annotation 
+        if it were to be drawn, no matter if it actually can be drawn or not. 
+        """
+
+        # Source: matplotlib(==3.6.3)/text.py:914-919
+        with cbook._setattr_cm(annotation.figure, dpi=fig.dpi):
+            bbox, info, descent = annotation._get_layout(annotation._renderer)
+            x, y = annotation.get_unitless_position()
+            x, y = annotation.get_transform().transform((x, y))
+            bbox = bbox.translated(x, y)
+            return bbox
+
+    def update_annotation(hover_target_idx, cursor_x, cursor_y):
         """Update annotation box content with the stats of the hover target"""
+
+        # Update annotation text
         target_pos = scp.get_offsets()[hover_target_idx]
+        # Coordinate system used by default is "offset points"
         annotation.xy = target_pos
         annotation.set_text(_pretty_dict_str(point_data[hover_target_idx]))
+        
+        # Update annotation position to avoid it going out of bounds
+        coord_transformer = ax.transData.inverted()  # Inverted (data => pixel) transformer
+        canv_width, canv_height = fig.canvas.get_width_height(physical=True)
+        anno_bbox = get_true_annotation_extent(annotation)
+        anno_width = anno_bbox.x1 - anno_bbox.x0
+        anno_height = anno_bbox.y1 - anno_bbox.y0
 
+        shift_left = cursor_x > canv_width//2
+        shift_down = cursor_y > canv_height//2
+
+        shifted_position = (
+            cursor_x - anno_width if shift_left else cursor_x, 
+            cursor_y - anno_height if shift_down else cursor_y
+        )
+        shifted_offset = (
+            -10 if shift_left else 10,
+            0 if shift_down else -20
+        )
+
+        annotation.xy = coord_transformer.transform(shifted_position)
+        annotation.xyann = shifted_offset
+
+
+    _prev_hover_target = None
     def on_hover(event):
         """On hover event handler for the plot. Displays an annotation when hovering over plot elements"""
+        nonlocal _prev_hover_target
         contains, targets = scp.contains(event)
         if contains:
-            update_annotation(targets['ind'][0])
-            annotation.set_visible(True)
-            fig.canvas.draw_idle()
+            target = targets['ind'][0]
+            if target != _prev_hover_target:
+                update_annotation(target, event.x, event.y)
+                annotation.set_visible(True)
+                fig.canvas.draw_idle()
+            _prev_hover_target = target
         else:
+            _prev_hover_target = None
             annotation.set_visible(False)
             fig.canvas.draw_idle()
 
