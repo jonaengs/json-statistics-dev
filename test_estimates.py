@@ -1,8 +1,7 @@
 import math
 import unittest
-from compute_stats import compute_histogram
 
-from compute_structures import EquiHeightBucket, KeyStat, StatType
+from compute_structures import EquiHeightBucket, Histogram, HistogramType, KeyStat, SingletonBucket, StatType
 from use_stats import _update_stats_info, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality, estimate_range_cardinality
 
 # Find and replace assert with assertEquals method:
@@ -583,12 +582,15 @@ class TestHistogram(unittest.TestCase):
                     null_count=0,
                     min_val=0,
                     max_val=15,
-                    histogram= [
-                        # Upper bound, count, ndv
-                        EquiHeightBucket(5, 49, 4),
-                        EquiHeightBucket(9, 41, 3),
-                        EquiHeightBucket(15, 30, 2)
-                    ]                
+                    histogram=Histogram(
+                        HistogramType.EQUI_HEIGHT, 
+                        [
+                            # Upper bound, count, ndv
+                            EquiHeightBucket(5, 49, 4),
+                            EquiHeightBucket(9, 41, 3),
+                            EquiHeightBucket(15, 30, 2)
+                        ]             
+                    ),
                 )
             }, 
             _meta_stats={
@@ -668,13 +670,16 @@ class TestHistogram(unittest.TestCase):
                     null_count=60,
                     min_val=-0.5,
                     max_val=10000,
-                    histogram=[
-                        # Upper bound, count, ndv
-                        EquiHeightBucket(-0.5, 40, 1),
-                        EquiHeightBucket(5.5, 20, 1),
-                        EquiHeightBucket(10, 40, 1),
-                        EquiHeightBucket(10000, 40, 1),
-                    ]                
+                    histogram=Histogram(
+                        HistogramType.EQUI_HEIGHT, 
+                        [
+                            # Upper bound, count, ndv
+                            SingletonBucket(-0.5, 40),
+                            SingletonBucket(5.5, 20),
+                            SingletonBucket(10, 40),
+                            SingletonBucket(10000, 40),
+                        ]
+                    ),
                 )
             }, 
             _meta_stats={
@@ -757,7 +762,10 @@ class TestHistogram(unittest.TestCase):
                     null_count=20,
                     min_val=False,
                     max_val=True,
-                    histogram=[EquiHeightBucket(False, 5, 1), EquiHeightBucket(True, 75, 1)]
+                    histogram=Histogram(
+                        HistogramType.EQUI_HEIGHT,
+                        [EquiHeightBucket(False, 5, 1), EquiHeightBucket(True, 75, 1)]
+                    ),
                 )
             },
             _meta_stats={
@@ -783,9 +791,14 @@ class TestHistogram(unittest.TestCase):
                     null_count=5,
                     min_val="",
                     max_val="zzzzz",
-                    histogram=[EquiHeightBucket("", 5, 1), EquiHeightBucket("abc", 75, 1), 
-                        EquiHeightBucket("abcc", 1, 1), EquiHeightBucket("zabc", 2, 1), 
-                        EquiHeightBucket("zz", 2, 1), EquiHeightBucket("zzzzz", 10, 1)]
+                    histogram=Histogram(
+                        HistogramType.SINGLETON,
+                        [
+                            SingletonBucket("", 5), SingletonBucket("abc", 75), 
+                            SingletonBucket("abcc", 1), SingletonBucket("zabc", 2), 
+                            SingletonBucket("zz", 2), SingletonBucket("zzzzz", 10)
+                        ]
+                    ),
                 )
             },
             _meta_stats={
@@ -873,12 +886,15 @@ class TestHistogram(unittest.TestCase):
                     null_count=0,
                     min_val=0,
                     max_val=15,
-                    histogram= [
-                        # Upper bound, count, ndv
-                        EquiHeightBucket(5, 49, 4),
-                        EquiHeightBucket(9, 41, 3),
-                        EquiHeightBucket(15, 30, 2)
-                    ]                
+                    histogram=Histogram(
+                        HistogramType.EQUI_HEIGHT,
+                        [
+                            # Upper bound, count, ndv
+                            EquiHeightBucket(5, 49, 4),
+                            EquiHeightBucket(9, 41, 3),
+                            EquiHeightBucket(15, 30, 2)
+                        ]                
+                    ),
                 )
             }, 
             _meta_stats={
