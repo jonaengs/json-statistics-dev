@@ -21,7 +21,7 @@ settings = munchify({
     },
     "stats": {
         "stats_type": StatType.HISTOGRAM,
-        "force_new": False,
+        "force_new": True,
         "sampling_rate": 0.0,
         "hyperloglog_error": 0.05,
         "num_histogram_buckets": 25,

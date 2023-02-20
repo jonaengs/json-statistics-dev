@@ -31,6 +31,7 @@ def plot_errors(data: dict[str, list[float]], title_data: dict|str):
         ax.hist(arr, range=(0, max(arr)), bins=100)
         ax.set_ylabel("Count")
         ax.set_xlabel(name)
+        ax.set_yscale('log')
 
     if isinstance(title_data, dict):
         fig.suptitle(_pretty_dict_str(title_data))
@@ -48,6 +49,7 @@ def scatterplot(x, y, point_data):
     markers = [sample_ratio_to_marker_map[p["sampling_rate"]] for p in point_data]
     colors = [setting["stats_type"].value for setting in point_data]
     # colors = [PruneStrat.UNIQUE_SUFFIX in setting["prune_strats"] for setting in point_data]
+    # colors = [PruneStrat.NO_TYPED_INNER_NODES in setting["prune_strats"] for setting in point_data]
 
     def add_markers(scp):
         """

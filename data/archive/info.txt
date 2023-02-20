@@ -1,0 +1,4 @@
+source: https://archive.org/details/dislikes_youtube_2021_12_video_json_files
+
+Files:
+dislikes_1 = youtubedislikes_20211127172443_8cba24ba.1637897329_vid.json.zst

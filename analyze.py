@@ -174,10 +174,6 @@ def run_analysis():
     
     # We could also simply store values to test against, rather than indexes to those values
     N_TEST_VALUES = 25
-    seed = random.randrange(0, sys.maxsize)
-    seed = 8481792292457891019
-    random.seed(seed)
-    log("random seed:", seed)
     # json_path_to_test_values = {
     #     # Not perfect. maybe try making arr into set before sampling. May require len(arr) adjustment
     #     path: random.sample(valid_arr, k=min(N_TEST_VALUES, len(valid_arr))) if valid_arr else []
@@ -269,21 +265,21 @@ def run_analysis():
     get_memberof_comparator = lambda tval: (lambda arr: check_type(arr, [tval]) and tval in arr)
 
     settings_to_try = {
-        "stats_type": list(StatType),
+        "stats_type": [st for st in StatType if st != StatType.BASIC],
         "prune_strats": [
-            # [],
-            [PruneStrat.MAX_NO_PATHS, PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
-            [PruneStrat.MAX_NO_PATHS],
-            [PruneStrat.MIN_FREQ],
-            [PruneStrat.MAX_PREFIX_LENGTH],
-            [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
+            [],
+            # [PruneStrat.MAX_NO_PATHS, PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
+            # [PruneStrat.MAX_NO_PATHS],
+            # [PruneStrat.MIN_FREQ],
+            # [PruneStrat.MAX_PREFIX_LENGTH],
+            # [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
             
 
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        # "num_histogram_buckets": [8, 30, 100],
-        "num_histogram_buckets": [10, 50],
+        "num_histogram_buckets": [5, 30, 100],
+        # "num_histogram_buckets": [10, 50],
         "sampling_rate": [0.0, 0.9, 0.98],
         # "sampling_rate": [0.0],
         "prune_params": [
@@ -299,6 +295,9 @@ def run_analysis():
             },
         ],
     }
+
+    log("Settings to try:", quiet=True)
+    log(settings_to_try, quiet=True)
 
     def generate_settings_combinations():
         all_combinations = itertools.product(*settings_to_try.values())
@@ -343,8 +342,9 @@ def run_analysis():
     test_settings = [
         {
             'stats_type': StatType.HISTOGRAM,
+            # 'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES],
             'prune_strats': [],
-            'num_histogram_buckets': 20, 
+            'num_histogram_buckets': 100, 
             'sampling_rate': 0,
             "prune_params": {}
         },
@@ -377,10 +377,10 @@ def run_analysis():
         overlaps_data = []
         memberof_data = []
 
-        err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
         t0 = time.time_ns()
         for json_path in json_paths:
+            err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
             # test_vals = []
             # for key_path in filter(lambda kp: kp in key_paths, get_possible_key_paths(json_path)):
             #     test_vals += generate_test_vals(value_gen_stats[key_path].min_val, value_gen_stats[key_path].max_val)
@@ -424,7 +424,8 @@ def run_analysis():
                 
 
                 # Operators below only work with numeric values
-                if isinstance(tval, Json_Number): 
+                # if isinstance(tval, Json_Number): 
+                if type(tval) in (int, float):
                     # less than operator
                     lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(tval))
                     lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, tval), tval)
@@ -551,8 +552,8 @@ def _examine_query(query: Query):
     with open(os.path.join(settings.stats.out_dir, settings.stats.filename + "_analysis.pickle"), "rb") as f:
         data = pickle.load(f)
 
-    def is_match(query, setting):
-        for k, v in query.items():
+    def is_match(st_query, setting):
+        for k, v in st_query.items():
             if v is None or \
                 (k in setting and v == setting[k]) or \
                 (isinstance(v, tuple) and any(_v == setting[k] for _v in v)):
@@ -564,7 +565,7 @@ def _examine_query(query: Query):
 
     
     def get_matches(query):
-        matches = [t for t in data if is_match(query, t[0])]
+        matches = [t for t in data if is_match(query.stats, t[0])]
         pruned_matches = [
             (
                 t[0],
@@ -617,7 +618,7 @@ def _examine_query(query: Query):
             plot_errors(data_dict, title)
 
 
-    query_results = get_matches(query.stats)
+    query_results = get_matches(query)
     plot_data(query_results, split_key=query.split_key)
 
 
@@ -665,7 +666,7 @@ def examine_analysis_results():
     # If multiple values should accepted, wrap those values in a *tuple*
     query_1 = Query(
         stats={
-            "stats_type": StatType.HISTOGRAM,
+            "stats_type": StatType.BASIC,
             "prune_strats": [],
             "num_histogram_buckets": None,
             "sampling_rate": (0.0, 0.3, 0.9, 0.98),
@@ -697,11 +698,27 @@ def examine_analysis_results():
         split_key=None
     )
 
-    if False:
-        _examine_query(query_1)
-    
-    plot_stat_size_v_err()
+    query_3 = Query(
+        stats={
+            "stats_type": StatType.HISTOGRAM,
+            "prune_strats": [],
+            "num_histogram_buckets": None,
+            "sampling_rate": 0.0,
+            "prune_params": None,
+        },
+        err_keys=[
+            "gt",
+            "lt",
+        ],
+        split_key=None
+    )
 
+    show_scatter = True
+
+    if show_scatter:
+        plot_stat_size_v_err()
+    else:
+        _examine_query(query_3)
 
 
 

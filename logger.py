@@ -1,3 +1,4 @@
+import errno
 import inspect
 import shutil
 import sys
@@ -25,7 +26,7 @@ class Singleton(type):
 
 class Logger(metaclass=Singleton):
     silenced = settings.logger.silenced
-    n_logs_to_keep = 5
+    n_logs_to_keep = 1
 
     def __init__(self) -> None:
         # Create lig file, failing if the file already exists
@@ -61,7 +62,13 @@ class Logger(metaclass=Singleton):
             # Sort files in ascending order, meaning from oldest to most recent
             files.sort(key=lambda p: os.path.getmtime(p))
             for f in files[:-(self.n_logs_to_keep+1)]:
-                shutil.move(f, os.path.join(old_logs_path, os.path.basename(f)))
+                try:
+                    shutil.move(f, os.path.join(old_logs_path, os.path.basename(f)))
+                except PermissionError as e:
+                    # Can fail if the file we're trying to access is being written to still
+                    if e.args[0] != errno.EACCES:
+                        raise e
+                    
 
         self.log(dt.now(), quiet=True)
         # self.log_settings()

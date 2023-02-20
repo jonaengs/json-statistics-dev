@@ -13,9 +13,8 @@
 - [x] Handle lists of enums
   * Once we have these enum array histograms, can we delete the histograms for each array child element?
   * We would need some threshold? enum array length, value frequencies, etc.
-- [ ] Make random happen once at the start of the program, so sampling etc. is also deterministic
+- [x] Make random seed happen once at the start of the program, so sampling etc. is also deterministic
 - [ ] Identify and handle pairs/tuples? 
-- [ ] Should singleton histograms be maps instead of lists? Especially when so large. 
 - [ ] Support JSON_CONTAINS_PATH()? (https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#function_json-contains-path)
 
 
@@ -24,7 +23,7 @@
 
 ## UTILS / TRACKERS / LOGGER / CACHING
 - [x] Make logger put old files in a separate folder
-- [ ] Make tracker decorators take an optional argument specifying extra information to identify the function by so that we can differentiate between e.g., the time a function uses when different StatTypes are active.
+- [x] Make tracker decorators take an optional argument specifying extra information to identify the function by so that we can differentiate between e.g., the time a function uses when different StatTypes are active.
 - [ ] Rewrite settings to be something like a nested class or dataclass (but singleton?) , for better autocomplete and refactoring
 
 ## PRUNING
@@ -34,6 +33,7 @@
 - [x] Make something that can use statistics with (suffix/prefix)-pruned key paths
 - [x] Prune typed inner nodes (i.e., all object/array nodes)
 - [ ] When max_no_paths_pruning (and min_freq ig), have some system to prioritize which paths are removed when the count is the same (like remove interior nodes before leaf nodes, or the other way around). With leaf nodes, we can still set a lower bound for the cardinality of parent nodes, though the search may be expensive. 
+- [ ] Currently, no_typed_inner_nodes does not play nice with exists/is_null/is_not_null and all the json array queries due to the lookup logic assuming that the removed inner nodes exist. Fix it.  
 
 ## STATS
 - [x] Find some way to test for "key-path type confusion"
@@ -50,6 +50,7 @@
 - [ ] Allow testing against data sets of different sizes, to compare how the techniques' performance changes with different size data sets (error should go up).
 - [x] Visualize the results
 - [ ] Analyze the result
+- [ ] Examine apparent difference in GT results and LT results
 
 ## TESTING
 Write tests for all important logic (wasting time on erroneous results sucks)

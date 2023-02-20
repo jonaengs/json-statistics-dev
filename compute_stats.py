@@ -7,6 +7,7 @@ import os
 from pprint import pprint
 import random
 import re
+import sys
 from typing import Any, Callable
 from hyperloglog import HyperLogLog
 
@@ -340,6 +341,17 @@ def make_key_path(_parent_path, key, val)-> tuple[str, str]:
     base_path = parent_path + str(key)
     return key_path, base_path
 
+def hll_encode_val(val):
+    # inefficient
+    # TODO: Find a better way to deal with ints than converting them to strings
+    if type(val) == float:
+        return struct.pack("!f", val)
+
+    elif type(val) == int:
+        return int(val).to_bytes(8, sys.byteorder, signed=True)  # JSON Number is 8 bytes max
+    
+    # Should be string or int (or bool)
+    return val
 
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
@@ -416,7 +428,8 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                     # hll_val = int.to_bytes(8) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
                     # For some reason, int.to_bytes() seems to produce values that don't work nicely with hyperloglog
                     # Resulting in ndv=1 for sets of values with true ndv much(?) higher
-                    hll_val = str(val) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
+                    # hll_val = str(val) if type(val) == int else struct.pack("!f", val) if type(val) == float else val
+                    hll_val = hll_encode_val(val)
                     stats[key_str].hll.add(hll_val)
 
                 # Record min and max values
@@ -576,6 +589,55 @@ def make_enum_array_statistics(collection, _nbins=None):
         traverse(doc)
 
     
+    # TODO: Both BASIC and NDV_HYPERLOG consume way more memory than they should,
+    # undermining the usefulnes of memory and time and analysis. Fix it. 
+    if settings.stats.stats_type == StatType.BASIC:
+        return {
+            path: KeyStat(
+                count=len(arrs),
+                null_count=0,
+            )
+            for path, arrs in candidates.items()
+        }
+
+    if settings.stats.stats_type == StatType.NDV_HYPERLOG:
+        ndvs = {}
+        for path, arrs in candidates.items():
+            counter = HyperLogLog(settings.stats.hyperloglog_error)
+            for e in itertools.chain(*arrs):
+                counter.add(hll_encode_val(e))
+            
+            ndvs[path] = len(counter)
+
+        enum_arr_stats = {
+            path: KeyStat(
+                count=len(candidates[path]),
+                null_count=0,
+                ndv=ndv,
+            ) 
+            for path, ndv in ndvs.items()
+        }
+
+        return enum_arr_stats
+
+    ndvs = {}
+    if settings.stats.stats_type in (StatType.BASIC_NDV, StatType.NDV_WITH_MODE):
+        for path, arrs in candidates.items():
+            counter = Counter(itertools.chain(*map(set, arrs)))
+            ndvs[path] = len(counter)
+
+        enum_arr_stats = {
+            path: KeyStat(
+                count=len(candidates[path]),
+                null_count=0,
+                ndv=ndv,
+                mode_info=(ModeInfo(*counter.most_common(1)[0]) if settings.stats.stats_type == StatType.NDV_WITH_MODE else None)
+            ) 
+            for path, ndv in ndvs.items()
+        }
+
+        return enum_arr_stats
+
     histograms = {}
     approach = 2
     ndvs = {}
@@ -611,7 +673,7 @@ def make_enum_array_statistics(collection, _nbins=None):
                         [SingletonBucket(val, count) for val, count in counter.most_common()]
                     )
 
-        arr_stats = {
+        enum_arr_stats = {
             path: KeyStat(
                 count=len(candidates[path]),
                 null_count=0,
@@ -621,9 +683,9 @@ def make_enum_array_statistics(collection, _nbins=None):
             for path, histogram in histograms.items()
         }
 
-        log(f"Created stats for {len(arr_stats)} enum arrays!")
+        log(f"Created stats for {len(enum_arr_stats)} enum arrays!")
 
-        return arr_stats
+        return enum_arr_stats
 
 
 # Removes uncommon paths. Returns some summary statistics as well

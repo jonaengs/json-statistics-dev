@@ -45,6 +45,7 @@ BucketType = EquiHeightBucket | SingletonBucket
 class Histogram(NamedTuple):
     type: HistogramType
     buckets: list[BucketType]
+    # TODO: Should singleton histograms be maps instead of lists? Especially when so large. 
 
 @dataclass
 class KeyStat:

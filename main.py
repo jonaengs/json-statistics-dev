@@ -1,5 +1,6 @@
 import sys
 import argparse
+import random
 
 from compute_structures import StatType, PruneStrat
 from settings import settings
@@ -56,24 +57,23 @@ if __name__ == '__main__':
     update_settings(args, exclude_list=["mode"])
 
     settings.logger.store_output = True
+
+    # Do initial logging
     import logger
     logger.log(" ".join(sys.argv), quiet=True)
     logger.log(args, quiet=True)
     logger.logger.log_settings()
 
-    # import compute_stats
-    # compute_stats.run()
 
-    # from compute_stats import detect_potential_enum_arrays
-    # import data_cache
-    # detect_potential_enum_arrays(
-    #     data_cache.load_data()
-    # )
-
-    # sys.exit(0)
-
+    # BEGIN PROGRAM
     import analyze
     if not args.mode or "a" in args.mode:
+        # Seed the random module
+        seed = random.randrange(0, sys.maxsize)
+        # seed = 8481792292457891019
+        random.seed(seed)
+        logger.log("random seed:", seed)
+
         analyze.run_analysis()
     if "v" in args.mode:
         analyze.examine_analysis_results()

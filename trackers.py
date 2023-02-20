@@ -98,11 +98,11 @@ class TimeTracker:
             s_mean, s_min, s_max = sum(sys_ts)/len(sys_ts), min(sys_ts), max(sys_ts)
             # formatter = get_time_formatter(s_mean)
             formatter = format_time
-            log(f"SYSTEM: mean={formatter(s_mean)} min={formatter(s_min)} max={formatter(s_max)} total={formatter(sum(sys_ts))}")
+            log(f"SYSTEM:\tmean={formatter(s_mean)} min={formatter(s_min)} max={formatter(s_max)} total={formatter(sum(sys_ts))}")
             
             prog_ts = list(zip(*all_ts))[1]
             p_mean, p_min, p_max = sum(prog_ts)/len(prog_ts), min(prog_ts), max(prog_ts)
-            log(f"PROGRAM: mean={formatter(p_mean)} min={formatter(p_min)} max={formatter(p_max)} total={formatter(sum(prog_ts))}")
+            log(f"PROGRAM:\tmean={formatter(p_mean)} min={formatter(p_min)} max={formatter(p_max)} total={formatter(sum(prog_ts))}")
 
             log("-"*30)
 

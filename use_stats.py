@@ -164,7 +164,6 @@ def estimate_gt_cardinality(stat_path: str, gt_value: float|int):
         return est_card * INEQ_MULTIPLIER 
 
     data: KeyStat = stats[stat_path]
-    # max_val not gathered for str and bool types
     if gt_value >= data.max_val or data.max_val == data.min_val:
         return 0
 
@@ -205,7 +204,7 @@ def estimate_gt_cardinality(stat_path: str, gt_value: float|int):
                 case HistogramType.EQUI_HEIGHT:
                     estimate = 0
                     bucket_lower_bound = data.min_val
-                    for bucket in map(lambda b: EquiHeightBucket(*b), data.histogram.buckets):
+                    for bucket in data.histogram.buckets:
                         if bucket_lower_bound > gt_value:
                             estimate += bucket.count
                         elif bucket.upper_bound > gt_value:
@@ -248,7 +247,7 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
     match STATS_TYPE:
         case StatType.BASIC | StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
             data_range = data.max_val - data.min_val
-            compare_range = min(lt_value - data.min_val, data_range)
+            compare_range = max(lt_value - data.min_val, data_range)
             overlap = compare_range / data_range
 
             return overlap * data.valid_count
@@ -442,64 +441,93 @@ def _get_enum_arr_stats(stat_path, arr_type: type):
 
 @time_tracker.record_time_used
 def _get_memberof_cardinality_estimate(stat_path, lookup_val):
+    # Assumes stat_path in stats
 
     # Only accepts primitive values
     assert isinstance(lookup_val, Json_Primitive)
 
     arr_info_stat_path = make_enum_array_stat_path(stat_path, type(lookup_val))
 
-    if arr_info_stat_path in stats:
-        histogram = stats[arr_info_stat_path].histogram
+    match settings.stats.stats_type:
+        case StatType.BASIC:
+            arr_info_stat_path = make_enum_array_stat_path(stat_path, type(lookup_val))
+            if arr_info_stat_path in stats:
+                ks = stats[arr_info_stat_path]
+                return ks.count * JSON_MEMBEROF_MULTIPLIER
 
-        assert histogram.type in (HistogramType.SINGLETON, HistogramType.SINGLETON_PLUS), histogram.type  
-        
-        hist_buckets = histogram.buckets if histogram.type == HistogramType.SINGLETON else histogram.buckets[:-1]
-        for bucket in hist_buckets:
-            if bucket.value == lookup_val:
-                return bucket.count
-        else:
-            if histogram.type == HistogramType.SINGLETON_PLUS:
-                plus_bucket: EquiHeightBucket = hist_buckets[-1]
-                # TODO: This may be a bad estimate. Look into fixing
-                # return plus_bucket.count / plus_bucket.ndv
-                return plus_bucket.count
-    
-    
-    # return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
+            return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
+        case StatType.BASIC_NDV | StatType.NDV_HYPERLOG:
+            arr_info_stat_path = make_enum_array_stat_path(stat_path, type(lookup_val))
+            if arr_info_stat_path in stats:
+                ks = stats[arr_info_stat_path]
+                return ks.count / ks.ndv
 
+            return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
+        case StatType.NDV_WITH_MODE:
+            arr_info_stat_path = make_enum_array_stat_path(stat_path, type(lookup_val))
+            if arr_info_stat_path in stats:
+                ks = stats[arr_info_stat_path]
+                if ks.mode_info:
+                    if ks.mode_info.value == lookup_val:
+                        return ks.mode_info.count
+                    return (ks.count - ks.mode_info.count) / (ks.ndv - 1)
+                return ks.count / ks.ndv
 
-    type_sep = settings.stats.key_path_type_sep
-    type_suffix = type_suffixes[type(lookup_val)]
-    # Without special structures (enum array histograms), we'll have to do a lookup on every array index
-    # This is obviously very slow
-    estimate, arr_idx = 0, 0
-    key_path = stat_path + f".{arr_idx}{type_sep}{type_suffix}"
-    while key_path in stats:
-        histogram = stats[key_path].histogram
-        
-        # TODO: Look at handling equi-height histograms in a better way
-        # Equi-height histograms can occur here for integer enum arrays
-        if histogram.type == HistogramType.EQUI_HEIGHT:
-            base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
-            return base_cardinality * JSON_MEMBEROF_MULTIPLIER
-        
-        hist_buckets = histogram.buckets if histogram.type == HistogramType.SINGLETON else histogram.buckets[:-1]
-        for bucket in hist_buckets:
-            if bucket.value == lookup_val:
-                estimate += bucket.count
-                break
-        else:
-            if histogram.type == HistogramType.SINGLETON_PLUS:
-                plus_bucket: EquiHeightBucket = hist_buckets[-1]
-                # TODO: This may be a bad estimate. Look into fixing
-                # estimate += plus_bucket.count / plus_bucket.ndv
-                estimate += plus_bucket.count
+            return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
+        case StatType.HISTOGRAM:
+            arr_info_stat_path = make_enum_array_stat_path(stat_path, type(lookup_val))
+            if arr_info_stat_path in stats:
+                histogram = stats[arr_info_stat_path].histogram
 
-        arr_idx += 1
-        key_path = stat_path + f".{arr_idx}{type_sep}{type_suffix}"
+                assert histogram.type in (HistogramType.SINGLETON, HistogramType.SINGLETON_PLUS), histogram.type  
+                
+                hist_buckets = histogram.buckets if histogram.type == HistogramType.SINGLETON else histogram.buckets[:-1]
+                for bucket in hist_buckets:
+                    if bucket.value == lookup_val:
+                        return bucket.count
+                else:
+                    if histogram.type == HistogramType.SINGLETON_PLUS:
+                        plus_bucket: EquiHeightBucket = hist_buckets[-1]
+                        # TODO: This may be a bad estimate. Look into fixing
+                        # return plus_bucket.count / plus_bucket.ndv
+                        return plus_bucket.count
+            
+
+            return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
 
 
-    return estimate
+            type_sep = settings.stats.key_path_type_sep
+            type_suffix = type_suffixes[type(lookup_val)]
+            # Without special structures (enum array histograms), we'll have to do a lookup on every array index
+            # This is obviously very slow
+            estimate, arr_idx = 0, 0
+            key_path = stat_path + f".{arr_idx}{type_sep}{type_suffix}"
+            while key_path in stats:
+                histogram = stats[key_path].histogram
+                
+                # TODO: Look at handling equi-height histograms in a better way
+                # Equi-height histograms can occur here for integer enum arrays
+                if histogram.type == HistogramType.EQUI_HEIGHT:
+                    base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
+                    return base_cardinality * JSON_MEMBEROF_MULTIPLIER
+                
+                hist_buckets = histogram.buckets if histogram.type == HistogramType.SINGLETON else histogram.buckets[:-1]
+                for bucket in hist_buckets:
+                    if bucket.value == lookup_val:
+                        estimate += bucket.count
+                        break
+                else:
+                    if histogram.type == HistogramType.SINGLETON_PLUS:
+                        plus_bucket: EquiHeightBucket = hist_buckets[-1]
+                        # TODO: This may be a bad estimate. Look into fixing
+                        # estimate += plus_bucket.count / plus_bucket.ndv
+                        estimate += plus_bucket.count
+
+                arr_idx += 1
+                key_path = stat_path + f".{arr_idx}{type_sep}{type_suffix}"
+
+
+            return estimate
 
     # TODO: If we're doing min_freq or max_no_path pruning, anywhere between a few and all array paths may disappear
     # despite holding relevant data. Is there any way to remedy this?
@@ -516,7 +544,7 @@ def estimate_memberof_cardinality(stat_path, lookup_val):
 
     # We can only do precise estimation with histogram data
     # TODO: Look at whether we can do something more clever here. Using NDV maybe?
-    if STATS_TYPE != StatType.HISTOGRAM or stat_path not in stats:
+    if stat_path not in stats:
         base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
         return base_cardinality * JSON_MEMBEROF_MULTIPLIER
 
@@ -564,8 +592,7 @@ def estimate_contains_cardinality(stat_path, lookup_arr: list):
     if not lookup_arr:
         return stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
 
-    # We can only do precise estimation with histogram data
-    if STATS_TYPE != StatType.HISTOGRAM or stat_path not in stats:
+    if stat_path not in stats:
         base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
         return base_cardinality * JSON_CONTAINS_MULTIPLIER
 
@@ -630,7 +657,7 @@ def estimate_overlaps_cardinality(stat_path, lookup_arr):
     if not lookup_arr:
         return 0
 
-    if STATS_TYPE != StatType.HISTOGRAM or stat_path not in stats:
+    if stat_path not in stats:
         base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
         return base_cardinality * JSON_OVERLAPS_MULTIPLIER
 
