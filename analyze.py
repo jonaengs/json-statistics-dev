@@ -13,10 +13,10 @@ import typing
 
 from munch import munchify
 
-from compute_structures import Json_Primitive, Json_Primitive_No_Null, KeyStatEncoder, PruneStrat, StatType
+from compute_structures import Json_Number, Json_Primitive, Json_Primitive_No_Null, KeyStatEncoder, PruneStrat, StatType
 from compute_stats import _make_base_statistics, make_key_path
 from settings import lock_settings, settings, unlock_settings
-from use_stats import load_and_apply_stats, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality
+from use_stats import estimate_contains_cardinality, estimate_memberof_cardinality, estimate_overlaps_cardinality, load_and_apply_stats, estimate_eq_cardinality, estimate_exists_cardinality, estimate_gt_cardinality, estimate_is_null_cardinality, estimate_lt_cardinality, estimate_not_null_cardinality
 from logger import log
 import data_cache
 from visualize import pause_for_visuals, plot_errors, scatterplot
@@ -173,20 +173,68 @@ def run_analysis():
 
     
     # We could also simply store values to test against, rather than indexes to those values
-    N_TEST_VALUES = 10
+    N_TEST_VALUES = 25
     seed = random.randrange(0, sys.maxsize)
-    # seed = 1273304722126503270
+    seed = 8481792292457891019
     random.seed(seed)
     log("random seed:", seed)
-    json_path_to_test_values = {
-        # Not perfect. maybe try making arr into set before sampling. May require len(arr) adjustment
-        path: random.sample(valid_arr, k=min(N_TEST_VALUES, len(valid_arr))) if valid_arr else []
-        # path: list(set([e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if isinstance(e, Json_Primitive_No_Null)]))
-        # path: [e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
-        # path: random.choices(set(arr), k=min(N_TEST_VALUES, len(set(arr))))
-        for path, arr in json_path_values.items()
-        if (valid_arr := list(set(e for e in arr if isinstance(e, Json_Primitive_No_Null)))) is not None
-    }
+    # json_path_to_test_values = {
+    #     # Not perfect. maybe try making arr into set before sampling. May require len(arr) adjustment
+    #     path: random.sample(valid_arr, k=min(N_TEST_VALUES, len(valid_arr))) if valid_arr else []
+    #     # path: list(set([e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if isinstance(e, Json_Primitive_No_Null)]))
+    #     # path: [e for e in random.sample(arr, k=min(N_TEST_VALUES, len(arr))) if e is not None]
+    #     # path: random.choices(set(arr), k=min(N_TEST_VALUES, len(set(arr))))
+    #     for path, arr in json_path_values.items()
+    #     if (valid_arr := list(set(e for e in arr if isinstance(e, Json_Primitive_No_Null)))) is not None
+    # }
+
+    json_path_to_test_values = {}
+    for path, path_vals in json_path_values.items():
+        primitives_arr = [e for e in path_vals if isinstance(e, Json_Primitive_No_Null)]
+        if primitives_arr:  # Primitive test vals
+            val_set = set(primitives_arr)
+            test_vals = random.sample(list(val_set), k=min(N_TEST_VALUES, len(val_set)))
+            json_path_to_test_values[path] = test_vals
+
+        lists_arr = [l for l in path_vals if type(l) == list]
+        if lists_arr:
+            # Valid arr: Array where all elements belong to the same primitive type (basically, arrs of only ints or only strs)
+            valid_arrs = []  # Note that subarrays can be of different types. But all members of each subarray should be of the same type
+            for arr in path_vals:
+                if not arr or type(arr) != list:
+                    continue
+
+                arr_type = type(arr[0])
+                if not arr_type in (int, str):
+                    continue
+                if not (all(type(e) == arr_type for e in arr)):
+                    continue
+
+                valid_arrs.append(arr)
+
+            if valid_arrs:
+                # NOTE: Currently does not handle duplicates like the above solution does
+                
+                # Random selection of complete arrays
+                # + Random subsets of that random selection
+                # + Random element from each arr of the random selection
+                test_vals = random.sample(list(valid_arrs), k=min(N_TEST_VALUES, len(valid_arrs)))
+                all_test_vals = test_vals + [
+                    random_subset
+                    for arr in test_vals
+                    if (random_subset := [e for e in arr if random.randint(0,1)])
+                ] + [
+                    [random.choice(arr)]
+                    for arr in test_vals
+                ]
+
+                # Remove duplicates
+                all_test_vals = list(map(list, set(map(tuple, all_test_vals))))
+
+                json_path_to_test_values[path] = all_test_vals
+
+        if path not in json_path_to_test_values:                    
+            json_path_to_test_values[path] = []
 
 
     # pprint(sorted(json_paths)[:5])
@@ -213,10 +261,12 @@ def run_analysis():
     get_exists_comparator = lambda *_: (lambda _: 1)
     get_is_null_comparator = lambda *_: (lambda x: x is None)
     get_is_not_null_comparator = lambda *_: (lambda x: x is not None)
-    get_eq_comparator = lambda val: (lambda x: check_type(x, val) and x == val)
-    get_lt_comparator = lambda val: (lambda x: check_type(x, val) and x < val)
-    get_gt_comparator = lambda val: (lambda x: check_type(x, val) and x > val)
-
+    get_eq_comparator = lambda tval: (lambda x: check_type(x, tval) and x == tval)
+    get_lt_comparator = lambda tval: (lambda x: check_type(x, tval) and x < tval)
+    get_gt_comparator = lambda tval: (lambda x: check_type(x, tval) and x > tval)
+    get_contains_comparator = lambda tval: (lambda arr: check_type(arr, tval) and all(v in arr for v in tval))
+    get_overlaps_comparator = lambda tval: (lambda arr: check_type(arr, tval) and any(v in arr for v in tval))
+    get_memberof_comparator = lambda tval: (lambda arr: check_type(arr, [tval]) and tval in arr)
 
     settings_to_try = {
         "stats_type": list(StatType),
@@ -292,23 +342,12 @@ def run_analysis():
     
     test_settings = [
         {
-            'stats_type': StatType.NDV_HYPERLOG,
-            'prune_strats': [], 
+            'stats_type': StatType.HISTOGRAM,
+            'prune_strats': [],
+            'num_histogram_buckets': 20, 
             'sampling_rate': 0,
             "prune_params": {}
         },
-        {
-            'stats_type': StatType.NDV_HYPERLOG,
-            'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES], 
-            'sampling_rate': 0,
-            "prune_params": {}
-        },
-        # {
-        #     'stats_type': StatType.NDV_WITH_MODE,
-        #     'prune_strats': [], 
-        #     'sampling_rate': 0,
-        #     "prune_params": {}
-        # },
     ]
     use_test_settings = False
     print_high_errors = False
@@ -334,6 +373,9 @@ def run_analysis():
         eq_data = []
         lt_data = []
         gt_data = []
+        contains_data = []
+        overlaps_data = []
+        memberof_data = []
 
         err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
@@ -352,58 +394,83 @@ def run_analysis():
             # assert exists_ground_truth == _exists_ground_truth, (exists_ground_truth, _exists_ground_truth)
             exists_estimate = estimate_exists_cardinality(json_path_to_base_key_path(json_path=json_path))
             exists_data.append((exists_ground_truth, exists_estimate))
-            err_if_bad_est("exists", 200, exists_estimate, exists_ground_truth)
+            err_if_bad_est("exists", 500, exists_estimate, exists_ground_truth)
 
             # is null
             is_null_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_is_null_comparator())
             is_null_estimate = estimate_is_null_cardinality(json_path_to_base_key_path(json_path=json_path))
             is_null_data.append((is_null_ground_truth, is_null_estimate))
-            err_if_bad_est("is_null", 200, is_null_estimate, is_null_ground_truth)
+            err_if_bad_est("is_null", 500, is_null_estimate, is_null_ground_truth)
             
             # is not null
             is_not_null_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_is_not_null_comparator())
             is_not_null_estimate = estimate_not_null_cardinality(json_path_to_base_key_path(json_path=json_path))
             is_not_null_data.append((is_not_null_ground_truth, is_not_null_estimate))
-            err_if_bad_est("is_not_null", 200, is_not_null_estimate, is_not_null_ground_truth)
+            err_if_bad_est("is_not_null", 500, is_not_null_estimate, is_not_null_ground_truth)
 
-            for val in test_vals:
-                if not isinstance(val, typing.get_args(Json_Primitive_No_Null)):
-                    # Only test primitive non-null values
-                    continue
-
-                err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, val, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
+            for tval in test_vals:
+                err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, tval, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
                 # When a query is made, we find the type of the constant that's being compared against
                 # We do the same thing here to find the correct key-path
 
                 # equality operator
-                eq_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_eq_comparator(val))
-                eq_estimate = estimate_eq_cardinality(json_path_to_key_path(json_path, val), val)
-                eq_data.append((eq_ground_truth, eq_estimate))
-                if type(val) in (int, float):
-                    err_if_bad_est("eq", 150, eq_estimate, eq_ground_truth)
+                if isinstance(tval, Json_Primitive_No_Null):
+                    eq_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_eq_comparator(tval))
+                    eq_estimate = estimate_eq_cardinality(json_path_to_key_path(json_path, tval), tval)
+                    eq_data.append((eq_ground_truth, eq_estimate))
+                    if type(tval) in (int, float):
+                        err_if_bad_est("eq", 500, eq_estimate, eq_ground_truth)
                 
 
                 # Operators below only work with numeric values
-                if type(val) in (float, int): 
+                if isinstance(tval, Json_Number): 
                     # less than operator
-                    lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(val))
-                    lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, val), val)
+                    lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(tval))
+                    lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, tval), tval)
                     lt_data.append((lt_ground_truth, lt_estimate))
-                    err_if_bad_est("lt", 150, lt_estimate, lt_ground_truth)
+                    err_if_bad_est("lt", 500, lt_estimate, lt_ground_truth)
 
                     # greater than operator
-                    gt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_gt_comparator(val))
-                    gt_estimate = estimate_gt_cardinality(json_path_to_key_path(json_path, val), val)
+                    gt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_gt_comparator(tval))
+                    gt_estimate = estimate_gt_cardinality(json_path_to_key_path(json_path, tval), tval)
                     gt_data.append((gt_ground_truth, gt_estimate))
-                    err_if_bad_est("gt", 150, gt_estimate, gt_ground_truth)
+                    err_if_bad_est("gt", 500, gt_estimate, gt_ground_truth)
 
                     # range
                     # But: how do we combine two vals to get a range?
 
 
                 # LIKE? 
-                # IN ARRAY?
+                if isinstance(tval, list):
+                    ...
+                    # member of
+                    if len(tval) == 1:
+                        member = tval[0]
+                        memberof_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_memberof_comparator(member))
+                        memberof_estimate = estimate_memberof_cardinality(json_path_to_key_path(json_path, tval), member)
+                        memberof_data.append((memberof_ground_truth, memberof_estimate))
+                        err_if_bad_est("memberof", 500, memberof_estimate, memberof_ground_truth)
+
+                    # contains operator
+                    contains_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_contains_comparator(tval))
+                    contains_estimate = estimate_contains_cardinality(json_path_to_key_path(json_path, tval), tval)
+                    contains_data.append((contains_ground_truth, contains_estimate))
+                    err_if_bad_est("contains", 500, contains_estimate, contains_ground_truth)
+
+                    # overlaps operator
+                    overlaps_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_overlaps_comparator(tval))
+                    overlaps_estimate = estimate_overlaps_cardinality(json_path_to_key_path(json_path, tval), tval)
+                    overlaps_data.append((overlaps_ground_truth, overlaps_estimate))
+                    err_if_bad_est("overlaps", 500, overlaps_estimate, overlaps_ground_truth)
+
+                    # print()
+                    # print(len(tval))
+                    # print(tval)
+                    # if len(tval) == 1:
+                    #     print((memberof_ground_truth, memberof_estimate))
+                    # print((contains_ground_truth, contains_estimate))
+                    # print((overlaps_ground_truth, overlaps_estimate))
 
         t1 = time.time_ns()
         analysis_time_taken = t1 - t0
@@ -423,6 +490,12 @@ def run_analysis():
         lt_results = analyze_data(lt_data)
         log("gt data:", end="\t\t")
         gt_results = analyze_data(gt_data)
+        log("memberof data:", end="\t\t")
+        memberof_results = analyze_data(memberof_data)
+        log("contains data:", end="\t\t")
+        contains_results = analyze_data(contains_data)
+        log("overlaps data:", end="\t\t")
+        overlaps_results = analyze_data(overlaps_data)
         log("\n")
 
         error_data = {
@@ -432,6 +505,9 @@ def run_analysis():
                 "eq": eq_results,
                 "lt": lt_results,
                 "gt": gt_results,
+                "memberof": memberof_results,
+                "contains": contains_results,
+                "overlaps": overlaps_results,
         }
         
         if use_test_settings:

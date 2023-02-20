@@ -1,8 +1,10 @@
 from copy import copy
+import itertools
 import json
 from collections import Counter, defaultdict, namedtuple
 import math
 import os
+from pprint import pprint
 import random
 import re
 from typing import Any, Callable
@@ -252,7 +254,7 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
-    USE_SPECIAL_SINGLETON = False
+    USE_SINGLETON_PLUS = True
 
     # Try to create singleton-ish histogram if possible
     # Make sure to check after sorting the array to get a sorted histogram
@@ -262,12 +264,12 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
             [SingletonBucket(v, c) for v, c in Counter(arr).items()]
         )
     # elif isinstance(arr[0], str) and len(arr) > SOME_THRESHOLD=(C * _nbins):
-    elif isinstance(arr[0], str) and USE_SPECIAL_SINGLETON:
+    elif isinstance(arr[0], str) and USE_SINGLETON_PLUS:
         arr_counts = Counter(arr).most_common()
         arr_len = len(arr)
-        freq_threshold = 2 * (1/nbins)
+        freq_threshold = (1/nbins)
 
-        above_threshold = [(v, c) for v, c in arr_counts if c/arr_len >= freq_threshold]
+        above_threshold = [(v, c) for v, c in arr_counts if c/arr_len > freq_threshold]
         if not above_threshold:
             return None
 
@@ -531,6 +533,99 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
     return dict(stats)
 
 
+def make_enum_array_stat_path(base_path, arr_type):
+    type_sep = settings.stats.key_path_type_sep
+
+    # typed_path = base_path + type_sep + type_suffixes[arr_type]  # => xxx.names_array_string
+    typed_path = f"{base_path}[{type_suffixes[arr_type]}]"  # => xxx.names_array[string]
+
+    return typed_path
+
+def make_enum_array_statistics(collection, _nbins=None):
+    """
+    Requirements for an enum array:
+        1. All values in the array belong to the same primitive type
+            a. Currently, we only do strings and ints
+        2. NDV << Count (i.e., There is a relatively small number of unique values across all of the arrays)
+            * Currently not enforced. TODO: Figure out how (what threshold to use)
+
+        TODO: Figure out whether to include null values
+        TODO: Figure out how to handle within each array
+        TODO: Filter out candidates where all (/vast majority?) of arrs have length 1
+    """
+
+    candidates = defaultdict(list)  # Mapping: typed arr key-path -> list of homogeneous (wrt. type) primitive arrays found through path
+    def traverse(doc, str_path=""):
+        key_sep = settings.stats.key_path_key_sep
+        type_sep = settings.stats.key_path_type_sep
+
+        if type(doc) == list:
+            arr = doc
+            if arr and isinstance(arr[0], (str | int)):  # Exclude floats
+                arr_type = type(arr[0])
+                if all(type(e) == arr_type for e in arr):
+                    typed_path = make_enum_array_stat_path(str_path, arr_type)
+                    candidates[typed_path].append(arr)
+
+        for key, child in (doc.items() if type(doc) == dict else enumerate(doc)):
+            if type(child) in (dict, list):
+                new_path = str_path + (str_path and key_sep) + str(key) + type_sep + type_suffixes[type(child)]
+                traverse(child, new_path)
+
+    for doc in collection:
+        traverse(doc)
+
+    
+    histograms = {}
+    approach = 2
+    ndvs = {}
+    if settings.stats.stats_type == StatType.HISTOGRAM:
+        if approach == 1:
+            # Simple approach: Just take everything and dump it in a (potentially massive) singleton histogram
+            for path, arrs in candidates.items():
+                counter = Counter(itertools.chain(*map(set, arrs)))
+                ndvs[path] = len(counter)
+
+                histograms[path] = Histogram(
+                    HistogramType.SINGLETON,
+                    [SingletonBucket(val, count) for val, count in counter.items()]
+                )
+
+        elif approach == 2:
+            # Slightly more advanced approach: Use singleton_plus if too many unique values
+            nbins = _nbins or settings.stats.num_histogram_buckets
+            for path, arrs in candidates.items():
+                counter = Counter(itertools.chain(*map(set, arrs)))
+                ndvs[path] = len(counter)
+
+                if len(counter) > nbins:
+                    top_k = counter.most_common(nbins)
+                    histograms[path] = Histogram(
+                        HistogramType.SINGLETON_PLUS,
+                        [SingletonBucket(val, count) for val, count in top_k[:-1]] \
+                            + [EquiHeightBucket(None, top_k[-1][1], len(counter) - (nbins-1))]
+                    )
+                else:
+                    histograms[path] = Histogram(
+                        HistogramType.SINGLETON,
+                        [SingletonBucket(val, count) for val, count in counter.most_common()]
+                    )
+
+        arr_stats = {
+            path: KeyStat(
+                count=len(candidates[path]),
+                null_count=0,
+                ndv=ndvs[path],
+                histogram=histogram,
+            ) 
+            for path, histogram in histograms.items()
+        }
+
+        log(f"Created stats for {len(arr_stats)} enum arrays!")
+
+        return arr_stats
+
+
 # Removes uncommon paths. Returns some summary statistics as well
 @time_tracker.record_time_used
 def make_statistics(collection) -> list[dict, dict]:
@@ -544,6 +639,14 @@ def make_statistics(collection) -> list[dict, dict]:
         # Look at what JSON PATH in MySQL allows. Like wildcards
 
     base_stats = _make_base_statistics(collection)
+    if True:
+        enum_arr_stats = make_enum_array_statistics(collection)
+        base_stats = base_stats | enum_arr_stats
+        log("Joined enum array stats to base stats object!")
+
+        # TODO: Support deleting stats for children of enum arrays.
+        # This will also require us to change lookup logic to 
+        # use enum arrays on eq queries
 
     min_count_threshold = int(MIN_FREQ_THRESHOLD * len(collection)) * (PruneStrat.MIN_FREQ in settings.stats.prune_strats)
 
@@ -810,18 +913,19 @@ if __name__ == '__main__':
         _nbins=3
     )
 
-    assert test_hist == [
+    assert test_hist == Histogram(
+        HistogramType.EQUI_HEIGHT, [
         (5, 49, 4),
         (9, 41, 3),
         (15, 30, 2)
-    ]
+    ])
 
     bool_hist_1 = compute_histogram(([False]*5) + ([True]*40), _nbins=2)
     bool_hist_2 = compute_histogram(([True]*40) + ([False]*5))
-    assert bool_hist_1 == [(False, 5, 1), (True, 40, 1)] == bool_hist_2, (bool_hist_1, bool_hist_2)
+    assert bool_hist_1 == Histogram(HistogramType.SINGLETON, [(False, 5), (True, 40)]) == bool_hist_2, (bool_hist_1, bool_hist_2)
 
     str_hist = compute_histogram(list("aaabaaadaaabaaadx"), _nbins=len("abdx"))
-    assert str_hist == [("a", 12, 1), ("b", 2, 1), ("d", 2, 1), ("x", 1, 1)], str_hist
+    assert str_hist == Histogram(HistogramType.SINGLETON, [("a", 12), ("b", 2), ("d", 2), ("x", 1)]), str_hist
 
 
     collection = [

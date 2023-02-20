@@ -16,7 +16,6 @@ class StatType(Enum):
     NDV_WITH_MODE = 4
     HISTOGRAM = 5
 
-
 class PruneStrat(Enum):
     MIN_FREQ = 1
     MAX_NO_PATHS = 2

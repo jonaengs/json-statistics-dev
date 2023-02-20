@@ -24,18 +24,20 @@ settings = munchify({
         "force_new": False,
         "sampling_rate": 0.0,
         "hyperloglog_error": 0.05,
-        "num_histogram_buckets": 10,
+        "num_histogram_buckets": 25,
 
         "key_path_key_sep": '.',
         "key_path_type_sep": '_',
 
+        "data_dir": "data/",
+        "data_source": "recsys",
         "filename": "mini",
-        "data_dir": "data/recsys/",
+        "data_path": lambda self, *_: os.path.join(self.data_dir, self.data_source, self.filename) + ".json",
+        
         "out_dir": "stats/",
+        "out_path": lambda self, *_: os.path.join(self.out_dir, self.filename) + ".json",
         "stats_cache_dir": "stats/cache/",
 
-        "data_path": lambda self, *_: os.path.join(self.data_dir, self.filename) + ".json",
-        "out_path": lambda self, *_: os.path.join(self.out_dir, self.filename) + ".json",
 
         "prune_strats": [PruneStrat.MIN_FREQ],
         "prune_params": {
@@ -294,7 +296,7 @@ def _rec_test_unlock(parent):
 
 if __name__ == '__main__':
     assert settings.stats.out_path == (os.path.join(settings.stats.out_dir, settings.stats.filename) + ".json")
-    assert settings.stats.data_path == (os.path.join(settings.stats.data_dir, settings.stats.filename) + ".json")
+    assert settings.stats.data_path == (os.path.join(settings.stats.data_dir, settings.stats.data_source, settings.stats.filename) + ".json")
 
     # print(settings.stats.out_path)
     # settings.stats.filename = "adasdasd"
@@ -310,4 +312,4 @@ if __name__ == '__main__':
 
     # Make sure we didn't fuck up the settings somehow by locking and unlocking the settings
     assert settings.stats.out_path == (os.path.join(settings.stats.out_dir, settings.stats.filename) + ".json")
-    assert settings.stats.data_path == (os.path.join(settings.stats.data_dir, settings.stats.filename) + ".json")
+    assert settings.stats.data_path == (os.path.join(settings.stats.data_dir, settings.stats.data_source, settings.stats.filename) + ".json")

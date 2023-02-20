@@ -43,7 +43,7 @@ if __name__ == '__main__':
 
     # Arguments that touch settings
     parser.add_argument("stats.filename", nargs="?", help="name of file to use as data src (training or test)")
-    parser.add_argument("-d", "--data-dir", dest="stats.data_dir")
+    parser.add_argument("-d", "--data-dir", dest="stats.data_source")
     parser.add_argument("-q", "--quiet", dest="logger.silenced", action="store_true", help="stop logger printing to stdout")
     parser.add_argument("-n", "--new", dest="stats.force_new", action="store_true", help="Force creation of fresh statistics")
     parser.add_argument("-s", "--stats_type", dest="stats.stats_type", choices=StatType._member_names_, action=EnumAction.create(StatType))
@@ -63,6 +63,14 @@ if __name__ == '__main__':
 
     # import compute_stats
     # compute_stats.run()
+
+    # from compute_stats import detect_potential_enum_arrays
+    # import data_cache
+    # detect_potential_enum_arrays(
+    #     data_cache.load_data()
+    # )
+
+    # sys.exit(0)
 
     import analyze
     if not args.mode or "a" in args.mode:

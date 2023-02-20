@@ -1,7 +1,7 @@
 import math
-from compute_stats import get_statistics
+from compute_stats import get_statistics, make_enum_array_stat_path, type_suffixes
 
-from compute_structures import EquiHeightBucket, HistogramType, KeyStat, PruneStrat, StatType
+from compute_structures import EquiHeightBucket, HistogramType, Json_Primitive, KeyStat, PruneStrat, StatType
 
 from settings import settings
 from trackers import time_tracker
@@ -14,7 +14,7 @@ so that statistics are collected and can be used by the functions.
 """
 
 STATS_TYPE = settings.stats.stats_type
-stats = None
+stats: (dict[str, KeyStat] | None) = None
 meta_stats = None
 
 # TODO: CHECK VALUES
@@ -23,6 +23,10 @@ EQ_BOOL_MULTIPLIER = 0.5
 INEQ_MULTIPLIER = 0.3  # (gt, lt, gte, lte)
 RANGE_MULTIPLIER = 0.3
 IS_NULL_MULTIPLIER = 0.1
+
+JSON_MEMBEROF_MULTIPLIER = 0.1
+JSON_CONTAINS_MULTIPLIER = 0.1
+JSON_OVERLAPS_MULTIPLIER = 0.3
 
 
 def load_and_apply_stats():
@@ -220,6 +224,9 @@ def estimate_gt_cardinality(stat_path: str, gt_value: float|int):
                         if bucket.value > gt_value:
                             estimate += bucket.count
 
+                case _:
+                    assert False, f"MISSING CASE FOR: {data.histogram.type}"
+
             return estimate
 
         case _:
@@ -302,6 +309,8 @@ def estimate_lt_cardinality(stat_path: str, lt_value: float|int):
                         else:
                             break
 
+                case _:
+                    assert False, f"MISSING CASE FOR: {data.histogram.type}"
 
             return estimate
         
@@ -406,6 +415,12 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
 
                     # If we went past all buckets and never found anything with our value, estimate is 0
                     return 0
+
+                case HistogramType.SINGLETON_PLUS:
+                    normal_buckets = data.histogram.buckets[:-1]
+                    special_bucket: EquiHeightBucket = data.histogram.buckets[-1]
+                    fallback = special_bucket.count / special_bucket.ndv
+                    return next((b.count for b in normal_buckets if b.value == compare_value), fallback)
                 
                 case _:
                     assert False, f"MISSING CASE FOR: {data.histogram.type}"
@@ -413,6 +428,219 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
         case _:
             assert False, f"MISSING CASE FOR: {STATS_TYPE}"
 
+def _get_enum_arr_stats(stat_path, arr_type: type):
+    type_sep = settings.stats.key_path_type_sep
+    type_suffix = type_suffixes[arr_type]
+    arr_info_stat_path = make_enum_array_stat_path(stat_path, arr_type)
+
+    if arr_info_stat_path in stats:
+        return stats[arr_info_stat_path]
+
+    # We can also estimate from the ndv of each idx, but 
+    # the estimation uncertainty would be massive:
+    # between max(ndvs) and sum(ndvs)
+
+@time_tracker.record_time_used
+def _get_memberof_cardinality_estimate(stat_path, lookup_val):
+
+    # Only accepts primitive values
+    assert isinstance(lookup_val, Json_Primitive)
+
+    arr_info_stat_path = make_enum_array_stat_path(stat_path, type(lookup_val))
+
+    if arr_info_stat_path in stats:
+        histogram = stats[arr_info_stat_path].histogram
+
+        assert histogram.type in (HistogramType.SINGLETON, HistogramType.SINGLETON_PLUS), histogram.type  
+        
+        hist_buckets = histogram.buckets if histogram.type == HistogramType.SINGLETON else histogram.buckets[:-1]
+        for bucket in hist_buckets:
+            if bucket.value == lookup_val:
+                return bucket.count
+        else:
+            if histogram.type == HistogramType.SINGLETON_PLUS:
+                plus_bucket: EquiHeightBucket = hist_buckets[-1]
+                # TODO: This may be a bad estimate. Look into fixing
+                # return plus_bucket.count / plus_bucket.ndv
+                return plus_bucket.count
+    
+    
+    # return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
+
+
+    type_sep = settings.stats.key_path_type_sep
+    type_suffix = type_suffixes[type(lookup_val)]
+    # Without special structures (enum array histograms), we'll have to do a lookup on every array index
+    # This is obviously very slow
+    estimate, arr_idx = 0, 0
+    key_path = stat_path + f".{arr_idx}{type_sep}{type_suffix}"
+    while key_path in stats:
+        histogram = stats[key_path].histogram
+        
+        # TODO: Look at handling equi-height histograms in a better way
+        # Equi-height histograms can occur here for integer enum arrays
+        if histogram.type == HistogramType.EQUI_HEIGHT:
+            base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
+            return base_cardinality * JSON_MEMBEROF_MULTIPLIER
+        
+        hist_buckets = histogram.buckets if histogram.type == HistogramType.SINGLETON else histogram.buckets[:-1]
+        for bucket in hist_buckets:
+            if bucket.value == lookup_val:
+                estimate += bucket.count
+                break
+        else:
+            if histogram.type == HistogramType.SINGLETON_PLUS:
+                plus_bucket: EquiHeightBucket = hist_buckets[-1]
+                # TODO: This may be a bad estimate. Look into fixing
+                # estimate += plus_bucket.count / plus_bucket.ndv
+                estimate += plus_bucket.count
+
+        arr_idx += 1
+        key_path = stat_path + f".{arr_idx}{type_sep}{type_suffix}"
+
+
+    return estimate
+
+    # TODO: If we're doing min_freq or max_no_path pruning, anywhere between a few and all array paths may disappear
+    # despite holding relevant data. Is there any way to remedy this?
+
+
+@_apply_common_pre_post_processing
+def estimate_memberof_cardinality(stat_path, lookup_val):
+    """
+    MySQL docs: https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#operator_member-of
+    """
+
+    # TODO: Look at solutions for when we we don't have histograms. 
+    # Can we still do some kind of automation?
+
+    # We can only do precise estimation with histogram data
+    # TODO: Look at whether we can do something more clever here. Using NDV maybe?
+    if STATS_TYPE != StatType.HISTOGRAM or stat_path not in stats:
+        base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
+        return base_cardinality * JSON_MEMBEROF_MULTIPLIER
+
+
+    return _get_memberof_cardinality_estimate(stat_path, lookup_val)
+
+
+@_apply_common_pre_post_processing
+def estimate_contains_cardinality(stat_path, lookup_arr: list):
+    """
+    JSON_CONTAINS returns all objects of which the query object is a strict subset.
+
+    Example of how MySQL's JSON_CONTAINS works for arrays (slightly changed JSON_OVERLAPS example from https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#function_json-overlaps)
+
+    > SELECT JSON_CONTAINS("[1,3,5,7]", "[1]");
+    > 1 row: [1,3,5,7]
+    
+    > SELECT JSON_CONTAINS("[1,3,5,7]", "1");
+    > 1 row: [1,3,5,7]
+    
+    > SELECT JSON_CONTAINS("[1,3,5,7]", "2");
+    > 0 rows
+
+    > SELECT JSON_CONTAINS("[1,3,5,7]", "[1, 7]");
+    > 1 row: [1,3,5,7] 
+
+    > SELECT JSON_CONTAINS("[1,3,5,7]", "[1, 2]");
+    > 0 rows 
+
+    > SELECT JSON_CONTAINS("[1,3,5,7]", "[]");
+    > 1 row: [1,3,5,7]
+    """
+    
+    # MAIN LOGIC:
+    # If lookup_arr is empty: return array key-path count
+    # If lookup_arr has length 1: check stats of that single value
+    # If lookup_arr length > 1: ???? Either multiply as if independent, or take count of least frequently occurring val
+
+    # While JSON_OVERLAPS support looking up a single value, this function
+    # will only support lists
+    assert type(lookup_arr) == list
+
+
+    # If lookup array empty, everything overlaps
+    if not lookup_arr:
+        return stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
+
+    # We can only do precise estimation with histogram data
+    if STATS_TYPE != StatType.HISTOGRAM or stat_path not in stats:
+        base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
+        return base_cardinality * JSON_CONTAINS_MULTIPLIER
+
+    estimates = {v: 0 for v in lookup_arr}  # Estimated count for each value in the lookup array
+    for lookup_value in lookup_arr:
+        estimates[lookup_value] = _get_memberof_cardinality_estimate(stat_path, lookup_value)
+        
+        
+    if len(estimates) == 1:
+        return list(estimates.values())[0]
+
+    # TODO: FIgure out what to do with multiple lookup values
+    upper_bound = min(estimates.values())
+
+    enum_arr_stats = _get_enum_arr_stats(stat_path, type(lookup_arr[0]))
+    if enum_arr_stats:
+        count = enum_arr_stats.count
+        lower_bound = math.prod(est / count for est in estimates.values()) * count
+
+        # print("contains bounds:", ((math.ceil(lower_bound), upper_bound)))
+
+    # return upper_bound
+
+    return upper_bound / len(estimates)
+
+
+@_apply_common_pre_post_processing
+def estimate_overlaps_cardinality(stat_path, lookup_arr):
+    """
+    JSON_OVERLAPS returns all objects that overlap (share values) with the query object in any way.
+
+    Example of how MySQL's JSON_CONTAINS works for arrays (slightly changed JSON_OVERLAPS example from https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#function_json-overlaps)
+
+    > SELECT JSON_OVERLAPS("[1,3,5,7]", "[1]");
+    > 1 row: [1,3,5,7]
+    
+    > SELECT JSON_OVERLAPS("[1,3,5,7]", "1");
+    > 1 row: [1,3,5,7]
+    
+    > SELECT JSON_OVERLAPS("[1,3,5,7]", "2");
+    > 0 rows
+
+    > SELECT JSON_OVERLAPS("[1,3,5,7]", "[1, 7]");
+    > 1 row: [1,3,5,7] 
+
+    > SELECT JSON_OVERLAPS("[1,3,5,7]", "[1, 2]");
+    > 1 row: [1,3,5,7] 
+
+    > SELECT JSON_OVERLAPS("[1,3,5,7]", "[]");
+    > 0 rows
+    """
+
+    # MAIN LOGIC:
+    # If lookup_arr is empty: return 0
+    # If lookup_arr has length 1: check stats of that single value
+    # If lookup_arr length > 1: Either add up count of each, or take count of most frequently occurring val
+
+    # While JSON_OVERLAPS support looking up a single value, this function
+    # will only support lists
+    assert type(lookup_arr) == list
+
+    if not lookup_arr:
+        return 0
+
+    if STATS_TYPE != StatType.HISTOGRAM or stat_path not in stats:
+        base_cardinality = stats[stat_path].valid_count if stat_path in stats else meta_stats["highest_count_skipped"]
+        return base_cardinality * JSON_OVERLAPS_MULTIPLIER
+
+    estimates = [
+        _get_memberof_cardinality_estimate(stat_path, lookup_val)
+        for lookup_val in lookup_arr
+    ]
+
+    return max(estimates)
+    
 
 """
 Example usage:
