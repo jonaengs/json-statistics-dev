@@ -16,4 +16,4 @@ if __name__ == '__main__':
     print(statistics[0])
     print(statistics[1])
     with open(out_path, mode="w") as f:
-        json.dump(statistics, f, cls=KeyStatEncoder)
+        json.dump(statistics, f, cls=KeyStatEncoder, indent=1)

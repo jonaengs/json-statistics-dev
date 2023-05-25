@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, NotRequired, TypedDict
 from dataclasses import asdict, dataclass
 from enum import Enum
 import json
@@ -73,4 +73,16 @@ class KeyStatEncoder(json.JSONEncoder):
             return o.name
 
         return super().default(o)   
+
+Statistics = dict[str, KeyStat]
+class StatisticsMeta(TypedDict):
+    highest_count_skipped: int
+    collection_size: int
+    stats_type: StatType
+    sampling_rate: float
+    unique_key_paths_found: int
+    unique_key_paths_stored: int
+    max_prefix_length: NotRequired[int]
+
+CombinedStatistics = list[Statistics, StatisticsMeta]
 

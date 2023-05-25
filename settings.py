@@ -20,7 +20,7 @@ settings = munchify({
         "out_dir": "logs/",
     },
     "stats": {
-        "stats_type": StatType.BASIC,
+        "stats_type": StatType.HISTOGRAM,
         "force_new": True,
         "sampling_rate": 0.0,
         "hyperloglog_error": 0.05,

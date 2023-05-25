@@ -317,12 +317,12 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
     )
 
 type_suffixes = {
-    list: "array",
-    dict: "object",
+    list: "arr",
+    dict: "obj",
     None.__class__: "",
-    bool: "boolean",
-    str: "string",
-    int: "number", float: "number",
+    bool: "bool",
+    str: "str",
+    int: "num", float: "num",
 }
 
 def make_key_path(_parent_path, key, val)-> tuple[str, str]:
@@ -380,7 +380,7 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                 stats[base_key_str].count += val is not None  # Change this if null values get a type suffix
                 stats[key_str].null_count += val is None
 
-                if type(val) in (int, float, bool):
+                if type(val) in (int, float, bool, str):
                     stats[key_str].min_val = min(val, stats[key_str].min_val if stats[key_str].min_val is not None else math.inf)
                     stats[key_str].max_val = max(val, stats[key_str].max_val if stats[key_str].max_val is not None else -math.inf)
 
@@ -433,7 +433,7 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                     stats[key_str].hll.add(hll_val)
 
                 # Record min and max values
-                if type(val) in (int, float, bool):
+                if type(val) in (int, float, bool, str):
                     stats[key_str].min_val = min(val, stats[key_str].min_val if stats[key_str].min_val is not None else math.inf)
                     stats[key_str].max_val = max(val, stats[key_str].max_val if stats[key_str].max_val is not None else -math.inf)
 
@@ -496,8 +496,8 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                     count=len(vals),
                     null_count=0,
                     # Don't calculate min and max for strings
-                    min_val=min(vals) if type(vals[0]) != str else None,
-                    max_val=max(vals) if type(vals[0]) != str else None,
+                    min_val=min(vals),
+                    max_val=max(vals),
                     ndv=len(set(vals))
                 )
     elif STATS_TYPE == StatType.NDV_WITH_MODE:
@@ -509,8 +509,8 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                     count=len(vals),
                     null_count=0,
                     # Don't calculate min and max for strings
-                    min_val=min(vals) if type(vals[0]) != str else None,
-                    max_val=max(vals) if type(vals[0]) != str else None,
+                    min_val=min(vals),
+                    max_val=max(vals),
                     ndv=len(set(vals)),
 
                     mode_info=ModeInfo(*Counter(vals).most_common(1)[0]),
@@ -534,8 +534,8 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                     count=len(vals),
                     null_count=0,
                     # Don't calculate min and max for strings
-                    min_val=min(vals) if type(vals[0]) != str else None,
-                    max_val=max(vals) if type(vals[0]) != str else None,
+                    min_val=min(vals),
+                    max_val=max(vals),
                     ndv=len(set(vals)),
                     histogram=histogram
                 )
