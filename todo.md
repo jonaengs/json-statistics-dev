@@ -16,6 +16,7 @@
 - [x] Make random seed happen once at the start of the program, so sampling etc. is also deterministic
 - [ ] Identify and handle pairs/tuples? 
 - [ ] Support JSON_CONTAINS_PATH()? (https://dev.mysql.com/doc/refman/8.0/en/json-search-functions.html#function_json-contains-path)
+- [ ] Set and enforce a maximum length for strings stored in min/max and histograms.
 
 
 ## BUGS

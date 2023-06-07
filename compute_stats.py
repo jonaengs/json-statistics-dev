@@ -8,11 +8,12 @@ from pprint import pprint
 import random
 import re
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from hyperloglog import HyperLogLog
+from tqdm import tqdm
 
 import struct
-from compute_structures import EquiHeightBucket, Histogram, HistogramType, Json_Number, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, SingletonBucket, StatType
+from compute_structures import EquiHeightBucket, Histogram, HistogramType, Json_Number, Json_Primitive, Json_Primitive_No_Null, KeyStat, KeyStatEncoder, ModeInfo, PruneStrat, SingletonBucket, StatType
 
 from trackers import time_tracker, local_mem_tracker, global_mem_tracker
 from settings import settings
@@ -255,7 +256,7 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
     min_bucket_size = math.ceil(len(arr)/nbins)
     arr.sort()
 
-    USE_SINGLETON_PLUS = True
+    USE_SINGLETON_PLUS = settings.stats.singleton_plus_enabled
 
     # Try to create singleton-ish histogram if possible
     # Make sure to check after sorting the array to get a sorted histogram
@@ -273,6 +274,9 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
         above_threshold = [(v, c) for v, c in arr_counts if c/arr_len > freq_threshold]
         if not above_threshold:
             return None
+        
+        # Sort buckets by value
+        above_threshold.sort(key=lambda t: t[0])
 
         combined_count = sum(c for v, c in above_threshold)
         
@@ -325,7 +329,7 @@ type_suffixes = {
     int: "num", float: "num",
 }
 
-def make_key_path(_parent_path, key, val)-> tuple[str, str]:
+def make_key_path(_parent_path: str, key: int | str, val: Json_Primitive)-> tuple[str, str]:
     """returns key path with and without the value type suffix, respectively"""
     key_sep = settings.stats.key_path_key_sep 
     type_sep = settings.stats.key_path_type_sep
@@ -341,9 +345,7 @@ def make_key_path(_parent_path, key, val)-> tuple[str, str]:
     base_path = parent_path + str(key)
     return key_path, base_path
 
-def hll_encode_val(val):
-    # inefficient
-    # TODO: Find a better way to deal with ints than converting them to strings
+def hll_encode_val(val: Json_Primitive_No_Null) -> str | int | bytes:
     if type(val) == float:
         return struct.pack("!f", val)
 
@@ -355,7 +357,7 @@ def hll_encode_val(val):
 
 @local_mem_tracker.record_peak_memory
 @time_tracker.record_time_used
-def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> dict[str, KeyStat]:
+def _make_base_statistics(collection: Iterable[dict], _STATS_TYPE=None, _SAMPLING_RATE=None) -> tuple[dict[str, KeyStat], int]:
     """
     STATS TYPES:
     1. count, null_count. For int & float: min and max. 
@@ -381,8 +383,9 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                 stats[key_str].null_count += val is None
 
                 if type(val) in (int, float, bool, str):
-                    stats[key_str].min_val = min(val, stats[key_str].min_val if stats[key_str].min_val is not None else math.inf)
-                    stats[key_str].max_val = max(val, stats[key_str].max_val if stats[key_str].max_val is not None else -math.inf)
+                    stats[key_str].min_val = min(val, stats[key_str].min_val) if stats[key_str].min_val is not None else val
+                    stats[key_str].max_val = max(val, stats[key_str].max_val) if stats[key_str].max_val is not None else val
+
 
                 return key_str
             case StatType.BASIC_NDV | StatType.HISTOGRAM | StatType.NDV_WITH_MODE:
@@ -434,8 +437,8 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
 
                 # Record min and max values
                 if type(val) in (int, float, bool, str):
-                    stats[key_str].min_val = min(val, stats[key_str].min_val if stats[key_str].min_val is not None else math.inf)
-                    stats[key_str].max_val = max(val, stats[key_str].max_val if stats[key_str].max_val is not None else -math.inf)
+                    stats[key_str].min_val = min(val, stats[key_str].min_val) if stats[key_str].min_val is not None else val
+                    stats[key_str].max_val = max(val, stats[key_str].max_val) if stats[key_str].max_val is not None else val
 
                 return key_str
             case _:
@@ -478,13 +481,16 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
                 traverse(val, new_parent_str_path, parent_path=parent_path + (key, ))
 
 
-    log(f"creating {STATS_TYPE.name} statistics for a collection of {len(collection)} documents...")
     global_mem_tracker.record_global_memory()
-    for doc in collection:
+    collection_size = 0
+    log(f"creating {STATS_TYPE.name} base statistics...")
+    for doc in tqdm(collection):
+        collection_size += 1
         # TODO?: Should maybe be done in blocks of N docs at a time, to emulate page sampling as used in real systems
         # TODO: Is python's random faulty in any way? It should be fine for this purpose, right?
         if (random.random() >= SAMPLING_RATE):
             traverse(doc)
+    log(f"created {STATS_TYPE.name} statistics for a collection of {collection_size} documents")
     
     global_mem_tracker.record_global_memory()
     if STATS_TYPE == StatType.BASIC_NDV:
@@ -543,7 +549,7 @@ def _make_base_statistics(collection, _STATS_TYPE=None, _SAMPLING_RATE=None) -> 
 
     global_mem_tracker.record_global_memory()
 
-    return dict(stats)
+    return dict(stats), collection_size
 
 
 def make_enum_array_stat_path(base_path, arr_type):
@@ -690,7 +696,7 @@ def make_enum_array_statistics(collection, _nbins=None):
 
 # Removes uncommon paths. Returns some summary statistics as well
 @time_tracker.record_time_used
-def make_statistics(collection) -> list[dict, dict]:
+def make_statistics(collection: Iterable) -> list[dict, dict]:
     STATS_TYPE = settings.stats.stats_type
     SAMPLING_RATE = settings.stats.sampling_rate
     
@@ -700,8 +706,8 @@ def make_statistics(collection) -> list[dict, dict]:
     # Max Prefix length, Max postfix length (prune middle keys)
         # Look at what JSON PATH in MySQL allows. Like wildcards
 
-    base_stats = _make_base_statistics(collection)
-    if True:
+    base_stats, collection_size = _make_base_statistics(collection)
+    if settings.stats.enum_statistics_enabled:
         enum_arr_stats = make_enum_array_statistics(collection)
         base_stats = base_stats | enum_arr_stats
         log("Joined enum array stats to base stats object!")
@@ -710,7 +716,7 @@ def make_statistics(collection) -> list[dict, dict]:
         # This will also require us to change lookup logic to 
         # use enum arrays on eq queries
 
-    min_count_threshold = int(MIN_FREQ_THRESHOLD * len(collection)) * (PruneStrat.MIN_FREQ in settings.stats.prune_strats)
+    min_count_threshold = int(MIN_FREQ_THRESHOLD * collection_size) * (PruneStrat.MIN_FREQ in settings.stats.prune_strats)
 
     pruned_path_stats = {}
 
@@ -808,7 +814,7 @@ def make_statistics(collection) -> list[dict, dict]:
 
     summary_stats = {
         "highest_count_skipped": min_count_threshold if max_count_excluded is None else max_count_excluded,
-        "collection_size": len(collection),
+        "collection_size": collection_size,
         "stats_type": STATS_TYPE,
         "sampling_rate": SAMPLING_RATE,
         "unique_key_paths_found": len(base_stats),

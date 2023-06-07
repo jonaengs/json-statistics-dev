@@ -13,8 +13,8 @@ def store_as_json(path):
         out.write("\n]")
 
 def create_custom_size():
-    name = "medium"
-    size = 5_000
+    name = "tiiiiny"
+    size = 100
 
     with open("test.json") as f:
         data = json.load(f)
@@ -24,7 +24,7 @@ def create_custom_size():
 
     
 if __name__ == '__main__':
-    file_path = "test.dat" or sys.argv[1]
+    file_path = sys.argv[1] if len(sys.argv) > 1 else "test.dat"
     
     store_as_json(file_path)
     # create_custom_size()

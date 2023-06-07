@@ -26,6 +26,9 @@ settings = munchify({
         "hyperloglog_error": 0.05,
         "num_histogram_buckets": 25,
 
+        "singleton_plus_enabled": True,
+        "enum_statistics_enabled": True,
+
         "key_path_key_sep": '.',
         "key_path_type_sep": '_',
 
@@ -41,7 +44,7 @@ settings = munchify({
 
         "prune_strats": [PruneStrat.MIN_FREQ],
         "prune_params": {
-            "min_freq_threshold": 0.01,
+            "min_freq_threshold": 0.001,
             "max_no_paths_threshold": 100,
             "max_prefix_length_threshold": 3,
         },
