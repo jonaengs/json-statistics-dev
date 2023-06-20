@@ -25,28 +25,24 @@ if __name__ == '__main__':
 
     # More complex case: input path is a tar archive containing several json collections. 
     elif in_path.endswith(".tar"):
-        print("mem before open tar:", psutil.Process().memory_info().rss)
         with tarfile.open(in_path, mode='r') as archive:
-            print("mem after open tar:", psutil.Process().memory_info().rss)  
             while (info := archive.next()):
-                print()
-                print(info.name)
-                print("mem while start before gc:", psutil.Process().memory_info().rss)
-                gc.collect()
-                print("mem while start after gc:", psutil.Process().memory_info().rss)
-
                 if not (info.isfile() and info.name.endswith(".json")):
                     continue
                 
+                print(info.name)
+                gc.collect()  # Try to get ahead of OOM issues
+                
                 collection_name = info.name.split("_")[-1][:-5]
                 json_file = archive.extractfile(info)
-                print("mem file open:", psutil.Process().memory_info().rss)
-                collection = (json.loads(line) for line in json_file)
-                print("mem collection created:", psutil.Process().memory_info().rss)
+                
+                
+                # collection = (json.loads(line) for line in json_file)
+                def yield_n_fields(generator, n): return (next(generator) for _ in range(n))
+                collection = (json.loads(line) for line in yield_n_fields(json_file, 100_000))
+
 
                 statistics = make_statistics(collection)
-                print("mem statistics created:", psutil.Process().memory_info().rss)
-
                 # Treat output path as a directory, not a file
                 stats_out_path = os.path.join(out_path, collection_name + ".json")
                 with open(stats_out_path, mode="w") as f:
@@ -57,7 +53,6 @@ if __name__ == '__main__':
                 del statistics
                 del collection
                 
-                print("")
 
     else:
         raise Exception("input_path has invalid file type identifier")

@@ -370,7 +370,7 @@ def estimate_eq_cardinality(stat_path: str, compare_value):
     data: KeyStat = stats[stat_path]
     # We currently don't track min and max for strings and bools. So we can't check if we're outside the range 
     # for those values
-    if type(compare_value) not in (str, bool) and (compare_value > data.max_val or compare_value < data.min_val):
+    if compare_value > data.max_val or compare_value < data.min_val:
         return 0
 
     match STATS_TYPE:
@@ -488,9 +488,8 @@ def _get_memberof_cardinality_estimate(stat_path, lookup_val):
                 else:
                     if histogram.type == HistogramType.SINGLETON_PLUS:
                         plus_bucket: EquiHeightBucket = hist_buckets[-1]
-                        # TODO: This may be a bad estimate. Look into fixing
-                        # return plus_bucket.count / plus_bucket.ndv
                         return plus_bucket.count
+                        # return plus_bucket.count / plus_bucket.ndv
             
 
             return stats[stat_path].count * JSON_MEMBEROF_MULTIPLIER
@@ -617,6 +616,7 @@ def estimate_contains_cardinality(stat_path, lookup_arr: list):
     # return upper_bound
 
     return upper_bound / len(estimates)
+    return upper_bound / math.sqrt(len(estimates))
 
 
 @_apply_common_pre_post_processing
@@ -667,6 +667,7 @@ def estimate_overlaps_cardinality(stat_path, lookup_arr):
     ]
 
     return max(estimates)
+    return max(estimates) * math.sqrt(len(lookup_arr))
     
 
 """

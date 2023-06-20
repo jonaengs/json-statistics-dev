@@ -23,7 +23,6 @@ import stats_cache
 import data_cache
 
 
-# TODO: Check that the case of repeat keys ({a: 1, a: 2}) is covered. Should be fine as long a json library is used
 # TODO: Figure out a key path format that is unlikely to collide with existing keys
     # Problem: {"a": {"a": []}} and {"a_dict.a": []} gives "a_dict.a_list" = 2
     # Maybe dashes can be a good idea to use, in addition to dots. Because they will be interpreted as minus signs they shouldn't be used as member names
@@ -42,7 +41,7 @@ import data_cache
         Combined with pruning of infrequent keypaths, this can cause an issue where a parent with lots of different children
         had all its children pruned and so cannot be reconstructed, while in actuality having a very high frequency
 * Q: Can we do any of the pattern mining that JSON Tiles does?
-* Q: Should we differentiate between floats and ints? JSON doesn't, and MySQL doesn't when querying. So we shouldn't either 
+* Q: Should we differentiate between floats and ints? JSON doesn't, and MySQL doesn't*** when querying. So we shouldn't either 
     On the other hand, histograms are much simpler to create for ints than for floats. 
     So if all vals in a keypath are ints, that could enable better/simpler statistics
     Problem: using sampling, we can't really know if all values associated with a key are ints. 
@@ -671,7 +670,10 @@ def make_enum_array_statistics(collection, _nbins=None):
                     histograms[path] = Histogram(
                         HistogramType.SINGLETON_PLUS,
                         [SingletonBucket(val, count) for val, count in top_k[:-1]] \
+                            # Either store the highest cardinality which was skipped
                             + [EquiHeightBucket(None, top_k[-1][1], len(counter) - (nbins-1))]
+                            # Or store the sum of all reamining cardinalities 
+                            # + [EquiHeightBucket(None, sum(counter.values()[nbins:]), len(counter) - (nbins-1))]
                     )
                 else:
                     histograms[path] = Histogram(

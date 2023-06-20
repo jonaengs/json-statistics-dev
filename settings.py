@@ -24,7 +24,7 @@ settings = munchify({
         "force_new": True,
         "sampling_rate": 0.0,
         "hyperloglog_error": 0.05,
-        "num_histogram_buckets": 25,
+        "num_histogram_buckets": 50,
 
         "singleton_plus_enabled": True,
         "enum_statistics_enabled": True,
@@ -42,7 +42,7 @@ settings = munchify({
         "stats_cache_dir": "stats/cache/",
 
 
-        "prune_strats": [PruneStrat.MIN_FREQ],
+        "prune_strats": [],
         "prune_params": {
             "min_freq_threshold": 0.001,
             "max_no_paths_threshold": 100,
