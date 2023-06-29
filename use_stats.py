@@ -584,7 +584,7 @@ def estimate_contains_cardinality(stat_path, lookup_arr: list):
 
     # While JSON_OVERLAPS support looking up a single value, this function
     # will only support lists
-    assert type(lookup_arr) == list
+    assert type(lookup_arr) in (list, tuple)
 
 
     # If lookup array empty, everything overlaps
@@ -616,7 +616,7 @@ def estimate_contains_cardinality(stat_path, lookup_arr: list):
     # return upper_bound
 
     return upper_bound / len(estimates)
-    return upper_bound / math.sqrt(len(estimates)   )
+    # return upper_bound / math.sqrt(len(estimates))
 
 
 @_apply_common_pre_post_processing
@@ -652,7 +652,7 @@ def estimate_overlaps_cardinality(stat_path, lookup_arr):
 
     # While JSON_OVERLAPS support looking up a single value, this function
     # will only support lists
-    assert type(lookup_arr) == list
+    assert type(lookup_arr) in (list, tuple)
 
     if not lookup_arr:
         return 0
@@ -667,7 +667,7 @@ def estimate_overlaps_cardinality(stat_path, lookup_arr):
     ]
 
     return max(estimates)
-    return max(estimates) * math.sqrt(len(lookup_arr))
+    # return max(estimates) * math.sqrt(len(lookup_arr))
     
 
 """

@@ -321,6 +321,7 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
 
 type_suffixes = {
     list: "arr",
+    tuple: "arr",
     dict: "obj",
     None.__class__: "",
     bool: "bool",

@@ -234,6 +234,8 @@ def run_analysis():
 
                 json_path_to_test_values[path] = all_test_vals
 
+                log("added test arr!")
+
         if path not in json_path_to_test_values:                    
             json_path_to_test_values[path] = []
 
@@ -273,7 +275,7 @@ def run_analysis():
     # Mapping of the 3-tuple (path, operator, argument?) to the
     # ground truth value
     ground_truths: dict[tuple[str, str, Any | None], int] = {}
-    print("Gathering ground truths...")
+    log("Gathering ground truths...")
     for json_path in json_paths:
         for op_name, operator_getter in [
             ("exists", get_exists_comparator),
@@ -332,7 +334,7 @@ def run_analysis():
                 )
                 ground_truths[(json_path, "overlaps", tval)] = truth
 
-    print(len(ground_truths))
+    log(len(ground_truths))
 
     settings_to_try = {
         # "stats_type": [st for st in StatType if st != StatType.BASIC],
@@ -447,7 +449,9 @@ def run_analysis():
         log(override_settings)
         update_stats_settings(override_settings)
         
+        t0 = time.time()
         stats, meta_stats = load_and_apply_stats()
+        stats_creation_duration = time.time() - t0
         stats_size = len(json.dumps([stats, meta_stats], cls=KeyStatEncoder).encode('utf-8'))
         log("Using statistics of size:", stats_size)
 
@@ -543,7 +547,7 @@ def run_analysis():
 
 
                 # LIKE? 
-                if isinstance(tval, list):
+                if isinstance(tval, tuple):
                     ...
                     # member of
                     if len(tval) == 1:
@@ -634,7 +638,9 @@ def run_analysis():
         meta_data = {
             "stats_size": stats_size,
             "time_taken": analysis_time_taken
-        }
+        } | ({
+            "stats_creation_time_taken": stats_creation_duration
+        } if settings.stats.force_new else {})
         all_results.append((override_settings, error_data, actual_data, meta_data))
 
     global_mem_tracker.record_global_memory()
