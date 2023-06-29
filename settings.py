@@ -34,7 +34,7 @@ settings = munchify({
 
         "data_dir": "data/",
         "data_source": "recsys",
-        "filename": "training",
+        "filename": "test",
         "data_path": lambda self, *_: os.path.join(self.data_dir, self.data_source, self.filename) + ".json",
         
         "out_dir": "stats/",

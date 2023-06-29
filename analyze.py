@@ -22,6 +22,7 @@ from logger import log
 import data_cache
 from visualize import pause_for_visuals, plot_errors, scatterplot
 from trackers import time_tracker, global_mem_tracker
+from notebooks.error_functions import symmetric_mean_absolute_relative_error as SMARE
 
 
 # Used to create ranges of real numbers used to stand in for python's builtin integer ranges
@@ -745,11 +746,26 @@ def examine_analysis_results():
         errors, stats_sizes, stats_infos = [], [], []
         for tup in data:
 
+            if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
+                continue
+
+            if tup[0]["prune_strats"]:
+                continue
+
+            # all_mean_errs = [
+            #     sum(err_arr) / (len(err_arr) or 1)
+            #     for err_arr in tup[1].values()
+            # ]
+            # num_empty_arrs = sum(not err_arr for err_arr in tup[1].values())
             all_mean_errs = [
-                sum(err_arr) / (len(err_arr) or 1)
-                for err_arr in tup[1].values()
+                SMARE(*zip(*err_arr))
+                for err_arr in tup[2].values()
+                if err_arr
             ]
-            num_empty_arrs = sum(not err_arr for err_arr in tup[1].values())
+            num_empty_arrs = sum(not err_arr for err_arr in tup[2].values())
+
+
+            
             mean_err = sum(all_mean_errs) / (len(all_mean_errs) - num_empty_arrs)
                 
             # eq_err_data = tup[1]["eq"]
