@@ -16,8 +16,8 @@ pyfakefs == 5.1.*
 
 # For data analysis and visualization
 pandas == 1.5.*
-matplotlib == 3.6.*
-seaborn == 0.12.*
+matplotlib == 3.6.*  # May require "apt install python3.X-tk" to display GUI
+
 
 # Fancy progress bar
 tqdm

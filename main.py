@@ -70,7 +70,7 @@ if __name__ == '__main__':
     if not args.mode or "a" in args.mode:
         # Seed the random module
         seed = random.randrange(0, sys.maxsize)
-        # seed = 8481792292457891019
+        seed = 6617389845874142767
         random.seed(seed)
         logger.log("random seed:", seed)
 

@@ -262,7 +262,7 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
     if len(set(arr)) <= nbins:
         return Histogram(
             HistogramType.SINGLETON,
-            [SingletonBucket(v, c) for v, c in Counter(arr).items()]
+            sorted([SingletonBucket(v, c) for v, c in Counter(arr).items()])
         )
     # elif isinstance(arr[0], str) and len(arr) > SOME_THRESHOLD=(C * _nbins):
     elif isinstance(arr[0], str) and USE_SINGLETON_PLUS:
@@ -277,7 +277,7 @@ def compute_histogram(arr, _nbins=None) -> Histogram | None:
         # Sort buckets by value
         above_threshold.sort(key=lambda t: t[0])
 
-        combined_count = sum(c for v, c in above_threshold)
+        combined_count = sum(c for _v, c in above_threshold)
         
         remainder_bucket = EquiHeightBucket(
             None,

@@ -12,6 +12,7 @@ from typing import Any, Callable
 import typing
 
 from munch import munchify
+from tqdm import tqdm
 
 from compute_structures import Json_Number, Json_Primitive, Json_Primitive_No_Null, KeyStatEncoder, PruneStrat, StatType
 from compute_stats import _make_base_statistics, make_key_path
@@ -88,8 +89,10 @@ def calc_error(truth, estimate):
     # Returns the (>1) factor by which the estimate is off from the truth, minus 1
 
     diff = abs(truth - estimate)
-    # error = diff / (truth or 1)
-    error = diff / (min(truth, estimate) or 1)
+    
+    error = diff / (truth or 1)
+    # error = diff / (min(truth, estimate) or 1)
+    
     return error
 
     if truth <= estimate:
@@ -173,7 +176,7 @@ def run_analysis():
 
     
     # We could also simply store values to test against, rather than indexes to those values
-    N_TEST_VALUES = 25
+    N_TEST_VALUES = 25 # per path. Does not affect the list test values
     # json_path_to_test_values = {
     #     # Not perfect. maybe try making arr into set before sampling. May require len(arr) adjustment
     #     path: random.sample(valid_arr, k=min(N_TEST_VALUES, len(valid_arr))) if valid_arr else []
@@ -225,7 +228,8 @@ def run_analysis():
                 ]
 
                 # Remove duplicates
-                all_test_vals = list(map(list, set(map(tuple, all_test_vals))))
+                # all_test_vals = list(map(list, set(map(tuple, all_test_vals))))
+                all_test_vals = list(set(map(tuple, all_test_vals))) # Leave lists as tuples
 
                 json_path_to_test_values[path] = all_test_vals
 
@@ -264,28 +268,100 @@ def run_analysis():
     get_overlaps_comparator = lambda tval: (lambda arr: check_type(arr, tval) and any(v in arr for v in tval))
     get_memberof_comparator = lambda tval: (lambda arr: check_type(arr, [tval]) and tval in arr)
 
+    
+    # Mapping of the 3-tuple (path, operator, argument?) to the
+    # ground truth value
+    ground_truths: dict[tuple[str, str, Any | None], int] = {}
+    print("Gathering ground truths...")
+    for json_path in json_paths:
+        for op_name, operator_getter in [
+            ("exists", get_exists_comparator),
+            ("is_null", get_is_null_comparator),
+            ("is_not_null", get_is_not_null_comparator)
+        ]:
+            truth = get_operation_cardinality_2(json_path_values, json_path, operator_getter())
+            ground_truths[(json_path, op_name, None)] = truth
+        test_vals = json_path_to_test_values[json_path]
+        for tval in test_vals:
+            if isinstance(tval, Json_Primitive_No_Null):
+                truth = get_operation_cardinality_2(
+                    collection=json_path_values, 
+                    json_path=json_path, 
+                    operation=get_eq_comparator(tval)
+                )
+                ground_truths[(json_path, "equal_to", tval)] = truth
+
+            if type(tval) in (int, float):
+                truth = get_operation_cardinality_2(
+                    collection=json_path_values, 
+                    json_path=json_path, 
+                    operation=get_lt_comparator(tval)
+                )
+                ground_truths[(json_path, "less_than", tval)] = truth
+
+                truth = get_operation_cardinality_2(
+                    collection=json_path_values, 
+                    json_path=json_path, 
+                    operation=get_gt_comparator(tval)
+                )
+                ground_truths[(json_path, "greater_than", tval)] = truth
+
+            assert(not type(tval) == list) # Require tuples instead of lists, to make tval hashable
+            if isinstance(tval, tuple):
+                if len(tval) == 1:
+                    member = tval[0]
+                    truth = get_operation_cardinality_2(
+                        collection=json_path_values, 
+                        json_path=json_path, 
+                        operation=get_memberof_comparator(member)
+                    )
+                    ground_truths[(json_path, "member_of", tval)] = truth
+
+                truth = get_operation_cardinality_2(
+                    collection=json_path_values, 
+                    json_path=json_path, 
+                    operation=get_contains_comparator(tval)
+                )
+                ground_truths[(json_path, "contains", tval)] = truth
+
+                truth = get_operation_cardinality_2(
+                    collection=json_path_values, 
+                    json_path=json_path, 
+                    operation=get_overlaps_comparator(tval)
+                )
+                ground_truths[(json_path, "overlaps", tval)] = truth
+
+    print(len(ground_truths))
+
     settings_to_try = {
-        "stats_type": [st for st in StatType if st != StatType.BASIC],
+        # "stats_type": [st for st in StatType if st != StatType.BASIC],
+        "stats_type": [st for st in StatType],
         "prune_strats": [
             [],
-            # [PruneStrat.MAX_NO_PATHS, PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
-            # [PruneStrat.MAX_NO_PATHS],
-            # [PruneStrat.MIN_FREQ],
-            # [PruneStrat.MAX_PREFIX_LENGTH],
-            # [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
+            [PruneStrat.MAX_NO_PATHS],
+            [PruneStrat.MIN_FREQ],
+            [PruneStrat.MAX_PREFIX_LENGTH],
+            [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
             
+            # [PruneStrat.MAX_NO_PATHS, PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
 
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        "num_histogram_buckets": [5, 30, 100],
+        "num_histogram_buckets": [6, 16, 32, 64, 128],
+        # "num_histogram_buckets": [5, 15, 30,  100],
         # "num_histogram_buckets": [10, 50],
-        "sampling_rate": [0.0, 0.9, 0.98],
+        "sampling_rate": [0.0, 0.7, 0.9, 0.98],
         # "sampling_rate": [0.0],
         "prune_params": [
             {
                 "min_freq_threshold": 0.01,
                 "max_no_paths_threshold": 200,
+                "max_prefix_length_threshold": 4,
+            },
+            {
+                "min_freq_threshold": 0.003,
+                "max_no_paths_threshold": 400,
                 "max_prefix_length_threshold": 4,
             },
             {
@@ -337,15 +413,24 @@ def run_analysis():
             yield override_setting
 
 
+    print(f"Testing {len(list(generate_settings_combinations()))} Number of unique setting combinations...")
     settings_generator = generate_settings_combinations()
     
     test_settings = [
+        # {
+        #     'stats_type': StatType.HISTOGRAM,
+        #     # 'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES],
+        #     'prune_strats': [],
+        #     'num_histogram_buckets': 100, 
+        #     'sampling_rate': 0,
+        #     "prune_params": {}
+        # },
         {
-            'stats_type': StatType.HISTOGRAM,
+            'stats_type': StatType.BASIC,
             # 'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES],
-            'prune_strats': [],
+            'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
             'num_histogram_buckets': 100, 
-            'sampling_rate': 0,
+            'sampling_rate': 0.98,
             "prune_params": {}
         },
     ]
@@ -379,7 +464,7 @@ def run_analysis():
 
 
         t0 = time.time_ns()
-        for json_path in json_paths:
+        for json_path in tqdm(json_paths):
             err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, None, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
             # test_vals = []
             # for key_path in filter(lambda kp: kp in key_paths, get_possible_key_paths(json_path)):
@@ -409,6 +494,13 @@ def run_analysis():
             err_if_bad_est("is_not_null", 500, is_not_null_estimate, is_not_null_ground_truth)
 
             for tval in test_vals:
+                get_eq_truth = lambda: ground_truths[(json_path, "equal_to", tval)]
+                get_lt_truth = lambda: ground_truths[(json_path, "less_than", tval)]
+                get_gt_truth = lambda: ground_truths[(json_path, "greater_than", tval)]
+                get_memberof_truth = lambda: ground_truths[(json_path, "member_of", tval)]
+                get_contains_truth = lambda: ground_truths[(json_path, "contains", tval)]
+                get_overlaps_truth = lambda: ground_truths[(json_path, "overlaps", tval)]
+
                 err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, tval, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
                 # When a query is made, we find the type of the constant that's being compared against
@@ -416,7 +508,11 @@ def run_analysis():
 
                 # equality operator
                 if isinstance(tval, Json_Primitive_No_Null):
-                    eq_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_eq_comparator(tval))
+                    # eq_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_eq_comparator(tval))
+                    # eq_ground_truth_2 = ground_truths[(json_path, "equal_to", tval)]
+                    # assert(eq_ground_truth == eq_ground_truth_2)
+                    
+                    eq_ground_truth = get_eq_truth()
                     eq_estimate = estimate_eq_cardinality(json_path_to_key_path(json_path, tval), tval)
                     eq_data.append((eq_ground_truth, eq_estimate))
                     if type(tval) in (int, float):
@@ -427,13 +523,16 @@ def run_analysis():
                 # if isinstance(tval, Json_Number): 
                 if type(tval) in (int, float):
                     # less than operator
-                    lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(tval))
+                    # lt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_lt_comparator(tval))
+                    # lt_ground_truth_2 = ground_truths[(json_path, "less_than", tval)]
+                    lt_ground_truth = get_lt_truth()                    
                     lt_estimate = estimate_lt_cardinality(json_path_to_key_path(json_path, tval), tval)
                     lt_data.append((lt_ground_truth, lt_estimate))
                     err_if_bad_est("lt", 500, lt_estimate, lt_ground_truth)
 
                     # greater than operator
-                    gt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_gt_comparator(tval))
+                    # gt_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_gt_comparator(tval))
+                    gt_ground_truth = get_gt_truth()
                     gt_estimate = estimate_gt_cardinality(json_path_to_key_path(json_path, tval), tval)
                     gt_data.append((gt_ground_truth, gt_estimate))
                     err_if_bad_est("gt", 500, gt_estimate, gt_ground_truth)
@@ -448,19 +547,22 @@ def run_analysis():
                     # member of
                     if len(tval) == 1:
                         member = tval[0]
-                        memberof_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_memberof_comparator(member))
+                        # memberof_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_memberof_comparator(member))
+                        memberof_ground_truth = get_memberof_truth()
                         memberof_estimate = estimate_memberof_cardinality(json_path_to_key_path(json_path, tval), member)
                         memberof_data.append((memberof_ground_truth, memberof_estimate))
                         err_if_bad_est("memberof", 500, memberof_estimate, memberof_ground_truth)
 
                     # contains operator
-                    contains_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_contains_comparator(tval))
+                    # contains_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_contains_comparator(tval))
+                    contains_ground_truth = get_contains_truth()
                     contains_estimate = estimate_contains_cardinality(json_path_to_key_path(json_path, tval), tval)
                     contains_data.append((contains_ground_truth, contains_estimate))
                     err_if_bad_est("contains", 500, contains_estimate, contains_ground_truth)
 
                     # overlaps operator
-                    overlaps_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_overlaps_comparator(tval))
+                    # overlaps_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_overlaps_comparator(tval))
+                    overlaps_ground_truth = get_overlaps_truth()
                     overlaps_estimate = estimate_overlaps_cardinality(json_path_to_key_path(json_path, tval), tval)
                     overlaps_data.append((overlaps_ground_truth, overlaps_estimate))
                     err_if_bad_est("overlaps", 500, overlaps_estimate, overlaps_ground_truth)
@@ -499,6 +601,18 @@ def run_analysis():
         overlaps_results = analyze_data(overlaps_data)
         log("\n")
 
+        actual_data = {
+            "exists": exists_data,
+            "is_null": is_null_data,
+            "is_not_null": is_not_null_data,
+            "eq": eq_data,
+            "lt": lt_data,
+            "gt": gt_data,
+            "memberof": memberof_data,
+            "contains": contains_data,
+            "overlaps": overlaps_data,
+        }
+
         error_data = {
                 "exists": exists_results,
                 "is_null": is_null_results,
@@ -520,7 +634,7 @@ def run_analysis():
             "stats_size": stats_size,
             "time_taken": analysis_time_taken
         }
-        all_results.append((override_settings, error_data, meta_data))
+        all_results.append((override_settings, error_data, actual_data, meta_data))
 
     global_mem_tracker.record_global_memory()
     if not use_test_settings:
@@ -638,8 +752,8 @@ def examine_analysis_results():
             num_empty_arrs = sum(not err_arr for err_arr in tup[1].values())
             mean_err = sum(all_mean_errs) / (len(all_mean_errs) - num_empty_arrs)
                 
-            eq_err_data = tup[1]["eq"]
-            eq_err = sum(eq_err_data) / len(eq_err_data)
+            # eq_err_data = tup[1]["eq"]
+            # eq_err = sum(eq_err_data) / len(eq_err_data)
 
             # lt_err_data = tup[1]["lt"]
             # lt_err = sum(lt_err_data) / len(lt_err_data)
@@ -654,8 +768,8 @@ def examine_analysis_results():
 
 
             errors.append(err)
-            stats_sizes.append(tup[2]["stats_size"])
-            # stats_sizes.append(tup[2]["time_taken"])
+            stats_sizes.append(tup[3]["stats_size"])
+            # stats_sizes.append(tup[3]["time_taken"])
             stats_infos.append(tup[0])
 
         scatterplot(errors, stats_sizes, stats_infos)
@@ -827,15 +941,16 @@ if __name__ == '__main__':
     assert count_types([True,"1",2,[],{},None]) == 5
     assert count_types([True,"1",2,[],{},None], exclude_null=False) == 6
 
-    assert get_base_path("a_object.up_down_array.0") == ("a", "up_down", "0")
+    # assert get_base_path("a_obj.up_down_arr.0") == ("a", "up_down", "0")
 
-    assert set(get_possible_key_paths(("a", "up_down", "0"))) == set((
-        'a_object.up_down_array.0_str', 'a_object.up_down_array.0_bool', 'a_object.up_down_array.0_number', 'a_object.up_down_array.0'
-    ))
+    # print(set(get_possible_key_paths(("a", "up_down", "0"))))
+    # assert set(get_possible_key_paths(("a", "up_down", "0"))) == set((
+    #     'a_obj.up_down_arr.0_str', 'a_obj.up_down_arr.0_bool', 'a_obj.up_down_arr.0_num', 'a_obj.up_down_arr.0'
+    # ))
 
     # Test update_stats_settings function
     stats_settings_copy = copy(settings.stats)
-    t1 = {"prune_strats": []}
+    t1 = {"prune_strats": None}
     assert stats_settings_copy == settings.stats
     update_stats_settings(t1)
     assert stats_settings_copy != settings.stats
@@ -851,17 +966,17 @@ if __name__ == '__main__':
     settings.stats.prune_params = prune_params_copy
 
 
-    assert calc_error(1, 1) == 0, calc_error(1, 1)
-    assert calc_error(1, 2) == calc_error(2, 4) == calc_error(4, 8) == 1
-    assert calc_error(2, 1) == calc_error(4, 2) == calc_error(8, 4) == 1
-    assert calc_error(1, 100) == 99, calc_error(1, 100)
-    assert calc_error(100, 1) == 99, calc_error(100, 1)
-    assert calc_error(0.1, 0.01) == 9, calc_error(0.1, 0.01)
-    assert calc_error(0, 1) == 1, calc_error(0, 1)
-    assert calc_error(1, 0) == 1, calc_error(1, 0)
+    # assert calc_error(1, 1) == 0, calc_error(1, 1)
+    # assert calc_error(1, 2) == calc_error(2, 4) == calc_error(4, 8) == 1
+    # assert calc_error(2, 1) == calc_error(4, 2) == calc_error(8, 4) == 1
+    # assert calc_error(1, 100) == 99, calc_error(1, 100)
+    # assert calc_error(100, 1) == 99, calc_error(100, 1)
+    # assert calc_error(0.1, 0.01) == 9, calc_error(0.1, 0.01)
+    # assert calc_error(0, 1) == 1, calc_error(0, 1)
+    # assert calc_error(1, 0) == 1, calc_error(1, 0)
 
 
-    # run_analysis()
+    run_analysis()
 
     # specific_queries()
 

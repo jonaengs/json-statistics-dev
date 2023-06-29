@@ -21,8 +21,8 @@ settings = munchify({
     },
     "stats": {
         "stats_type": StatType.HISTOGRAM,
-        "force_new": True,
-        "sampling_rate": 0.0,
+        "force_new": False,
+        "sampling_rate": 0.0,  # This is really the inverse of the sampling rate -- setting it to 1 excludes everything. TODO: fix
         "hyperloglog_error": 0.05,
         "num_histogram_buckets": 50,
 
@@ -30,11 +30,11 @@ settings = munchify({
         "enum_statistics_enabled": True,
 
         "key_path_key_sep": '.',
-        "key_path_type_sep": '_',
+        "key_path_type_sep": '/',
 
         "data_dir": "data/",
         "data_source": "recsys",
-        "filename": "mini",
+        "filename": "training",
         "data_path": lambda self, *_: os.path.join(self.data_dir, self.data_source, self.filename) + ".json",
         
         "out_dir": "stats/",

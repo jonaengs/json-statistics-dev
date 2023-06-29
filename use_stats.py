@@ -616,7 +616,7 @@ def estimate_contains_cardinality(stat_path, lookup_arr: list):
     # return upper_bound
 
     return upper_bound / len(estimates)
-    return upper_bound / math.sqrt(len(estimates))
+    return upper_bound / math.sqrt(len(estimates)   )
 
 
 @_apply_common_pre_post_processing
