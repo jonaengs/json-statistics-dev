@@ -1,4 +1,5 @@
 from copy import copy, deepcopy
+import gc
 import itertools
 import json
 import math
@@ -9,7 +10,7 @@ from collections import defaultdict, namedtuple
 import sys
 import time
 from typing import Any, Callable
-import typing
+from memory_profiler import memory_usage
 
 from munch import munchify
 from tqdm import tqdm
@@ -235,6 +236,7 @@ def run_analysis():
                 json_path_to_test_values[path] = all_test_vals
 
                 log("added test arr!")
+                log(f"Test array lengths: {[len(a) for a in all_test_vals]}", quiet=True)
 
         if path not in json_path_to_test_values:                    
             json_path_to_test_values[path] = []
@@ -259,6 +261,8 @@ def run_analysis():
     # key_path_ranges = {k: (min(vs), max(vs)) for k, vs in key_path_values.items() if not all(v is None for v in vs) }
     
     def check_type(x, y, number=True):
+        if type(x) in (tuple, list) and type(y) in (tuple, list):
+            return True
         return type(x) == type(y) or (type(x) in (int, float) and type(y) in (int, float) if number else False)
 
     get_exists_comparator = lambda *_: (lambda _: 1)
@@ -311,14 +315,13 @@ def run_analysis():
 
             assert(not type(tval) == list) # Require tuples instead of lists, to make tval hashable
             if isinstance(tval, tuple):
-                if len(tval) == 1:
-                    member = tval[0]
-                    truth = get_operation_cardinality_2(
-                        collection=json_path_values, 
-                        json_path=json_path, 
-                        operation=get_memberof_comparator(member)
-                    )
-                    ground_truths[(json_path, "member_of", tval)] = truth
+                first_member = tval[0]
+                truth = get_operation_cardinality_2(
+                    collection=json_path_values, 
+                    json_path=json_path, 
+                    operation=get_memberof_comparator(first_member)
+                )
+                ground_truths[(json_path, "member_of", first_member)] = truth
 
                 truth = get_operation_cardinality_2(
                     collection=json_path_values, 
@@ -351,7 +354,7 @@ def run_analysis():
             # Unless max_no high and min_freq high, this last one is redundant, as max_no will take precedence
             # [PruneStrat.MIN_FREQ, PruneStrat.MAX_NO_PATHS],
         ],
-        "num_histogram_buckets": [6, 16, 32, 64, 128],
+        "num_histogram_buckets": [6, 16, 32, 64, 128, 512],
         # "num_histogram_buckets": [5, 15, 30,  100],
         # "num_histogram_buckets": [10, 50],
         "sampling_rate": [0.0, 0.7, 0.9, 0.98],
@@ -420,28 +423,28 @@ def run_analysis():
     settings_generator = generate_settings_combinations()
     
     test_settings = [
-        # {
-        #     'stats_type': StatType.HISTOGRAM,
-        #     # 'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES],
-        #     'prune_strats': [],
-        #     'num_histogram_buckets': 100, 
-        #     'sampling_rate': 0,
-        #     "prune_params": {}
-        # },
         {
-            'stats_type': StatType.BASIC,
+            'stats_type': StatType.HISTOGRAM,
             # 'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES],
-            'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
-            'num_histogram_buckets': 100, 
-            'sampling_rate': 0.98,
+            'prune_strats': [],
+            'num_histogram_buckets': 1000, 
+            'sampling_rate': 0,
             "prune_params": {}
         },
+        # {
+        #     'stats_type': StatType.BASIC,
+        #     # 'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES],
+        #     'prune_strats': [PruneStrat.NO_TYPED_INNER_NODES, PruneStrat.UNIQUE_SUFFIX],
+        #     'num_histogram_buckets': 100, 
+        #     'sampling_rate': 0.98,
+        #     "prune_params": {}
+        # },
     ]
     use_test_settings = False
     print_high_errors = False
     if use_test_settings:
         settings_generator = test_settings
-    
+
     all_results = []
     log("Beginning analysis...")
     for override_settings in settings_generator:
@@ -449,9 +452,19 @@ def run_analysis():
         log(override_settings)
         update_stats_settings(override_settings)
         
+
+        gc.collect() # Clean up memory before doing measurements
+        mem_use_right_now = memory_usage(proc=-1, interval=0.00001, max_iterations=1, max_usage=True)
         t0 = time.time()
-        stats, meta_stats = load_and_apply_stats()
+        stats_creation_mem_use, (stats, meta_stats) = memory_usage(
+            (load_and_apply_stats, ),
+            # proc=-1,
+            interval=0.1, timeout=None, max_usage=True,
+            retval=True, 
+        )
         stats_creation_duration = time.time() - t0
+        stats_creation_mem_use_isolated = stats_creation_mem_use - mem_use_right_now
+        log("stats mem use, overall and alone:", stats_creation_mem_use, stats_creation_mem_use_isolated)
         stats_size = len(json.dumps([stats, meta_stats], cls=KeyStatEncoder).encode('utf-8'))
         log("Using statistics of size:", stats_size)
 
@@ -502,9 +515,6 @@ def run_analysis():
                 get_eq_truth = lambda: ground_truths[(json_path, "equal_to", tval)]
                 get_lt_truth = lambda: ground_truths[(json_path, "less_than", tval)]
                 get_gt_truth = lambda: ground_truths[(json_path, "greater_than", tval)]
-                get_memberof_truth = lambda: ground_truths[(json_path, "member_of", tval)]
-                get_contains_truth = lambda: ground_truths[(json_path, "contains", tval)]
-                get_overlaps_truth = lambda: ground_truths[(json_path, "overlaps", tval)]
 
                 err_if_bad_est = lambda pred, thresh, est, tru: err_if_high_err(pred, thresh, est, tru, tval, json_path=json_path, stats=stats, meta_stats=meta_stats) if print_high_errors else None
 
@@ -548,22 +558,25 @@ def run_analysis():
 
                 # LIKE? 
                 if isinstance(tval, tuple):
-                    ...
+                    first_member = tval[0]
+                    
+                    get_memberof_truth = lambda: ground_truths[(json_path, "member_of", first_member)]
+                    get_contains_truth = lambda: ground_truths[(json_path, "contains", tval)]
+                    get_overlaps_truth = lambda: ground_truths[(json_path, "overlaps", tval)]
+                    
                     # member of
-                    if len(tval) == 1:
-                        member = tval[0]
-                        # memberof_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_memberof_comparator(member))
-                        memberof_ground_truth = get_memberof_truth()
-                        memberof_estimate = estimate_memberof_cardinality(json_path_to_key_path(json_path, tval), member)
-                        memberof_data.append((memberof_ground_truth, memberof_estimate))
-                        err_if_bad_est("memberof", 500, memberof_estimate, memberof_ground_truth)
+                    # memberof_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_memberof_comparator(member))
+                    memberof_ground_truth = get_memberof_truth()
+                    memberof_estimate = estimate_memberof_cardinality(json_path_to_key_path(json_path, tval), first_member)
+                    memberof_data.append((memberof_ground_truth, memberof_estimate))
+                    err_if_bad_est("memberof", 500, memberof_estimate, memberof_ground_truth)
 
                     # contains operator
                     # contains_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_contains_comparator(tval))
                     contains_ground_truth = get_contains_truth()
                     contains_estimate = estimate_contains_cardinality(json_path_to_key_path(json_path, tval), tval)
                     contains_data.append((contains_ground_truth, contains_estimate))
-                    err_if_bad_est("contains", 500, contains_estimate, contains_ground_truth)
+                    err_if_bad_est("contains", 200, contains_estimate, contains_ground_truth)
 
                     # overlaps operator
                     # overlaps_ground_truth = get_operation_cardinality_2(collection=json_path_values, json_path=json_path, operation=get_overlaps_comparator(tval))
@@ -639,7 +652,9 @@ def run_analysis():
             "stats_size": stats_size,
             "time_taken": analysis_time_taken
         } | ({
-            "stats_creation_time_taken": stats_creation_duration
+            "stats_creation_time_taken": stats_creation_duration,
+            "stats_creation_max_mem_use": stats_creation_mem_use,
+            "stats_creation_max_mem_use_isolated": stats_creation_mem_use_isolated
         } if settings.stats.force_new else {})
         all_results.append((override_settings, error_data, actual_data, meta_data))
 
@@ -752,8 +767,8 @@ def examine_analysis_results():
         errors, stats_sizes, stats_infos = [], [], []
         for tup in data:
 
-            if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
-                continue
+            # if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
+            #     continue
 
             if tup[0]["prune_strats"]:
                 continue
@@ -789,12 +804,20 @@ def examine_analysis_results():
             err = mean_err
 
 
-            errors.append(err)
-            stats_sizes.append(tup[3]["stats_size"])
+            # errors.append(err)
+            errors.append(tup[3]["stats_creation_time_taken"])
+            # stats_sizes.append(tup[3]["stats_size"])
             # stats_sizes.append(tup[3]["time_taken"])
+            # stats_sizes.append(tup[3]["stats_creation_time_taken"])
+            stats_sizes.append(tup[3]["stats_creation_max_mem_use"])
             stats_infos.append(tup[0])
 
-        scatterplot(errors, stats_sizes, stats_infos)
+        
+        # ylabel = "Size (in Bytes)"
+        # ylabel = "Creation Time (in seconds)"
+        ylabel = "Maximum Memory Use (in MB)"
+        xlabel = "SMAPE (Symmetric Mean Absolute Percent Error)"
+        scatterplot(errors, stats_sizes, stats_infos, ylabel=ylabel, xlabel=xlabel)
 
 
     # The query stats is a override_settings dict matching the settings you're looking for.

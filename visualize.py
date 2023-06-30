@@ -45,7 +45,7 @@ def plot_errors(data: dict[str, list[float]], title_data: dict|str):
 
 # Hover code inspiration: https://stackoverflow.com/a/47166787/8132000
 # Marker code inspiration: https://stackoverflow.com/a/52303895/8132000
-def scatterplot(x, y, point_data):
+def scatterplot(x, y, point_data, ylabel="", xlabel=""):
     allowed_markers = ['o', 'v', 'P', '*', 'X']
     sample_ratio_to_marker_map = dict(zip(sorted(set(p["sampling_rate"] for p in point_data)), allowed_markers))
     markers = [sample_ratio_to_marker_map[p["sampling_rate"]] for p in point_data]
@@ -142,8 +142,8 @@ def scatterplot(x, y, point_data):
     scp = ax.scatter(x, y, c=colors, s=sizes)
     add_markers(scp)
 
-    ax.set_ylabel("Size (in Bytes)")#, fontsize=25)
-    ax.set_xlabel("SMAPE (Symmetric Mean Absolute Percent Error)")#, fontsize=25)
+    ax.set_ylabel(ylabel)#, fontsize=25)
+    ax.set_xlabel(xlabel)#, fontsize=25)
     
 
     # Thanks for helping: https://stackoverflow.com/a/43814479

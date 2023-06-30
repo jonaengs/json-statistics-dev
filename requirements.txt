@@ -2,7 +2,7 @@
 
 # Memory profiling:
 psutil == 5.9.*
-# memory_profiler == 0.61.*
+memory_profiler == 0.61.*
 
 # Algorithms
 hyperloglog == 0.0.*  # 0.0.14 used
