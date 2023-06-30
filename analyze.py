@@ -262,6 +262,8 @@ def run_analysis():
     
     def check_type(x, y, number=True):
         if type(x) in (tuple, list) and type(y) in (tuple, list):
+            if type(x[0]) != type(y[0]):
+                return False
             return True
         return type(x) == type(y) or (type(x) in (int, float) and type(y) in (int, float) if number else False)
 
@@ -767,8 +769,8 @@ def examine_analysis_results():
         errors, stats_sizes, stats_infos = [], [], []
         for tup in data:
 
-            # if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
-            #     continue
+            if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
+                continue
 
             if tup[0]["prune_strats"]:
                 continue
@@ -804,18 +806,18 @@ def examine_analysis_results():
             err = mean_err
 
 
-            # errors.append(err)
-            errors.append(tup[3]["stats_creation_time_taken"])
-            # stats_sizes.append(tup[3]["stats_size"])
+            errors.append(err)
+            # errors.append(tup[3]["stats_creation_time_taken"])
+            stats_sizes.append(tup[3]["stats_size"])
             # stats_sizes.append(tup[3]["time_taken"])
             # stats_sizes.append(tup[3]["stats_creation_time_taken"])
-            stats_sizes.append(tup[3]["stats_creation_max_mem_use"])
+            # stats_sizes.append(tup[3]["stats_creation_max_mem_use"])
             stats_infos.append(tup[0])
 
         
-        # ylabel = "Size (in Bytes)"
+        ylabel = "Size (in Bytes)"
         # ylabel = "Creation Time (in seconds)"
-        ylabel = "Maximum Memory Use (in MB)"
+        # ylabel = "Maximum Memory Use (in MB)"
         xlabel = "SMAPE (Symmetric Mean Absolute Percent Error)"
         scatterplot(errors, stats_sizes, stats_infos, ylabel=ylabel, xlabel=xlabel)
 

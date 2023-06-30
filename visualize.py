@@ -150,6 +150,7 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
     leg1 = plt.legend(
         handles=scp.legend_elements()[0], 
         labels={setting["stats_type"].name: 0 for setting in point_data}.keys(),
+        loc="upper right", 
         title="Statistics Type")
     ax.add_artist(leg1)
 
