@@ -1,4 +1,5 @@
 from math import log2
+from typing import Literal
 from matplotlib import cbook
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -46,14 +47,30 @@ def plot_errors(data: dict[str, list[float]], title_data: dict|str):
 # Hover code inspiration: https://stackoverflow.com/a/47166787/8132000
 # Marker code inspiration: https://stackoverflow.com/a/52303895/8132000
 def scatterplot(x, y, point_data, ylabel="", xlabel=""):
+    markers_signify: Literal["sampling_rate", "prune_strats"] = "prune_strats"
+
     allowed_markers = ['o', 'v', 'P', '*', 'X']
-    sample_ratio_to_marker_map = dict(zip(sorted(set(p["sampling_rate"] for p in point_data)), allowed_markers))
-    markers = [sample_ratio_to_marker_map[p["sampling_rate"]] for p in point_data]
     colors = [setting["stats_type"].value for setting in point_data]
     sizes = [
         100 + 60*max((log2(setting.get("num_histogram_buckets", 2)) - 3), 0)
         for setting in point_data
     ]
+    if markers_signify == "sampling_rate":
+        sample_ratio_to_marker_map = dict(zip(sorted(set(p["sampling_rate"] for p in point_data)), allowed_markers))
+        markers = [sample_ratio_to_marker_map[p["sampling_rate"]] for p in point_data]
+    else:
+        # if all(len(pd["prune_strats"]) <= 1 for pd in point_data):
+        #     # for pd in point_data:
+        #     #     pd["prune_strats"] = pd["prune_strats"][0] if pd["prune_strats"] else "No Prune Strat"
+        # else:
+        
+        for pd in point_data:
+            pd["prune_strats"] = tuple(pd["prune_strats"])
+
+        prune_strat_to_marker_map = dict(zip(set(p["prune_strats"] for p in point_data), allowed_markers))
+        markers = [prune_strat_to_marker_map[p["prune_strats"]] for p in point_data]
+
+
     # colors = [PruneStrat.UNIQUE_SUFFIX in setting["prune_strats"] for setting in point_data]
     # colors = [PruneStrat.NO_TYPED_INNER_NODES in setting["prune_strats"] for setting in point_data]
 
@@ -141,11 +158,19 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
     # scp = ax.scatter(x, y, c=colors)
     scp = ax.scatter(x, y, c=colors, s=sizes)
     add_markers(scp)
-
     ax.set_ylabel(ylabel)#, fontsize=25)
     ax.set_xlabel(xlabel)#, fontsize=25)
+
+    # ax.set(ylim=(50_001, 400_000))
+    # ax.set(xlim=(0.1, 2.02))
+
+    ## ANNOTATIONS ##
+    annotation = ax.annotate("", xy=(0, 0), xytext=(10, -20), textcoords="offset points", bbox={"boxstyle": "round", "fc": "w"})
+    annotation.set_visible(False)
+    fig.canvas.mpl_connect("motion_notify_event", on_hover)
     
 
+    ## LEGENDS ##
     # Thanks for helping: https://stackoverflow.com/a/43814479
     leg1 = plt.legend(
         handles=scp.legend_elements()[0], 
@@ -156,10 +181,10 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
 
     h = [
         plt.plot([],[], marker=marker, ls="None", color="grey")[0]
-        for i, marker in enumerate(markers)]
+        for i, marker in enumerate(set(markers))]
     leg2 = plt.legend(
         handles=h, 
-        labels=sample_ratio_to_marker_map.keys(), 
+        labels=sample_ratio_to_marker_map.keys() if markers_signify=="sampling_rate" else prune_strat_to_marker_map.keys(), 
         loc="lower left", 
         title="Sampling rate")
     ax.add_artist(leg2)
@@ -173,10 +198,5 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
         loc="center right", 
         title="Max Histogram Size")
     ax.add_artist(leg3)
-
-    annotation = ax.annotate("", xy=(0, 0), xytext=(10, -20), textcoords="offset points", bbox={"boxstyle": "round", "fc": "w"})
-    annotation.set_visible(False)
-    fig.canvas.mpl_connect("motion_notify_event", on_hover)
-
 
     plt.show()

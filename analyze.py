@@ -359,7 +359,7 @@ def run_analysis():
         "num_histogram_buckets": [6, 16, 32, 64, 128, 512],
         # "num_histogram_buckets": [5, 15, 30,  100],
         # "num_histogram_buckets": [10, 50],
-        "sampling_rate": [0.0, 0.7, 0.9, 0.98],
+        "sampling_rate": [0.0, 0.7, 0.9, 0.98, 0.995],
         # "sampling_rate": [0.0],
         "prune_params": [
             {
@@ -772,8 +772,13 @@ def examine_analysis_results():
             if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
                 continue
 
-            if tup[0]["prune_strats"]:
+            if not any(strat in tup[0]["prune_strats"] for strat in (PruneStrat.MAX_NO_PATHS, PruneStrat.MIN_FREQ)):
+                if tup[0]["prune_strats"]:
+                    continue
+
+            if tup[0]["sampling_rate"] != 0.98:
                 continue
+
 
             # all_mean_errs = [
             #     sum(err_arr) / (len(err_arr) or 1)
