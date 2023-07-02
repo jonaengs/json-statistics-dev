@@ -772,11 +772,18 @@ def examine_analysis_results():
             if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
                 continue
 
-            if not any(strat in tup[0]["prune_strats"] for strat in (PruneStrat.MAX_NO_PATHS, PruneStrat.MIN_FREQ)):
-                if tup[0]["prune_strats"]:
-                    continue
+            if tup[0]["prune_strats"]:
+                continue
 
-            if tup[0]["sampling_rate"] != 0.98:
+            # if not any(strat in tup[0]["prune_strats"] for strat in (PruneStrat.MAX_NO_PATHS, PruneStrat.MIN_FREQ)):
+            #     # if tup[0]["prune_strats"]:
+            #     #     continue
+            #     continue
+
+            if tup[0]["sampling_rate"] != 0.0:
+                continue
+
+            if tup[0].get("num_histogram_buckets", 0) > 128:
                 continue
 
 
@@ -785,12 +792,23 @@ def examine_analysis_results():
             #     for err_arr in tup[1].values()
             # ]
             # num_empty_arrs = sum(not err_arr for err_arr in tup[1].values())
+
+            predicate = lambda err_arr, operation: \
+                len(err_arr) > 0 and operation in (
+                        # "exists", "is_null", "is_not_null",
+                        "eq", "gt", "lt",
+                        # "memberof", "contains", "overlaps"    
+                    )
+            
             all_mean_errs = [
                 SMARE(*zip(*err_arr))
-                for err_arr in tup[2].values()
-                if err_arr
+                for operation, err_arr in tup[2].items()
+                if predicate(err_arr, operation)
             ]
-            num_empty_arrs = sum(not err_arr for err_arr in tup[2].values())
+            print([operation for operation, err_arr in tup[2].items()
+                if predicate(err_arr, operation)])
+
+            num_empty_arrs = sum(not err_arr for operation, err_arr in tup[2].items() if predicate(err_arr, operation))
 
 
             
@@ -823,8 +841,9 @@ def examine_analysis_results():
         ylabel = "Size (in Bytes)"
         # ylabel = "Creation Time (in seconds)"
         # ylabel = "Maximum Memory Use (in MB)"
-        xlabel = "SMAPE (Symmetric Mean Absolute Percent Error)"
-        scatterplot(errors, stats_sizes, stats_infos, ylabel=ylabel, xlabel=xlabel)
+        xlabel = "Average SMAPE Across Operations"
+        scatterplot(errors, stats_sizes, stats_infos, ylabel=ylabel, xlabel=xlabel,
+                    filename="size_v_err_no_sampling_no_unary_array_ops")
 
 
     # The query stats is a override_settings dict matching the settings you're looking for.

@@ -7,6 +7,7 @@ import matplotlib.markers as plt_markers
 from matplotlib.text import Text
 
 from compute_structures import PruneStrat
+from settings import settings
 
 def _pretty_dict_str(d):
     def fix_enum_list(l):
@@ -46,8 +47,8 @@ def plot_errors(data: dict[str, list[float]], title_data: dict|str):
 
 # Hover code inspiration: https://stackoverflow.com/a/47166787/8132000
 # Marker code inspiration: https://stackoverflow.com/a/52303895/8132000
-def scatterplot(x, y, point_data, ylabel="", xlabel=""):
-    markers_signify: Literal["sampling_rate", "prune_strats"] = "prune_strats"
+def scatterplot(x, y, point_data, ylabel="", xlabel="", filename=None):
+    markers_signify: Literal["sampling_rate", "prune_strats"] | None = None
 
     allowed_markers = ['o', 'v', 'P', '*', 'X']
     colors = [setting["stats_type"].value for setting in point_data]
@@ -58,7 +59,7 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
     if markers_signify == "sampling_rate":
         sample_ratio_to_marker_map = dict(zip(sorted(set(p["sampling_rate"] for p in point_data)), allowed_markers))
         markers = [sample_ratio_to_marker_map[p["sampling_rate"]] for p in point_data]
-    else:
+    elif markers_signify == "prune_strats":
         # if all(len(pd["prune_strats"]) <= 1 for pd in point_data):
         #     # for pd in point_data:
         #     #     pd["prune_strats"] = pd["prune_strats"][0] if pd["prune_strats"] else "No Prune Strat"
@@ -69,6 +70,8 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
 
         prune_strat_to_marker_map = dict(zip(set(p["prune_strats"] for p in point_data), allowed_markers))
         markers = [prune_strat_to_marker_map[p["prune_strats"]] for p in point_data]
+    else:
+        markers = []
 
 
     # colors = [PruneStrat.UNIQUE_SUFFIX in setting["prune_strats"] for setting in point_data]
@@ -79,6 +82,8 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
         matplotlib doesn't support a list of markers like it does for colors,
         so we have to set markers manually if we want more than one.
         """
+        if not markers: return
+
         paths = [
             marker_obj.get_path().transformed(marker_obj.get_transform())
             for marker_obj in map(plt_markers.MarkerStyle, markers)
@@ -154,15 +159,16 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
             fig.canvas.draw_idle()
 
 
-    fig, ax = plt.subplots(tight_layout=True, figsize=[10, 5])
+    # fig, ax = plt.subplots(tight_layout=True, figsize=[10, 5])
+    fig, ax = plt.subplots(tight_layout=True, figsize=[6, 4])
     # scp = ax.scatter(x, y, c=colors)
     scp = ax.scatter(x, y, c=colors, s=sizes)
     add_markers(scp)
     ax.set_ylabel(ylabel)#, fontsize=25)
     ax.set_xlabel(xlabel)#, fontsize=25)
 
-    # ax.set(ylim=(50_001, 400_000))
-    # ax.set(xlim=(0.1, 2.02))
+    ax.set(ylim=(1, 200_001))
+    ax.set(xlim=(0.1, 2.02))
 
     ## ANNOTATIONS ##
     annotation = ax.annotate("", xy=(0, 0), xytext=(10, -20), textcoords="offset points", bbox={"boxstyle": "round", "fc": "w"})
@@ -179,15 +185,17 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
         title="Statistics Type")
     ax.add_artist(leg1)
 
-    h = [
-        plt.plot([],[], marker=marker, ls="None", color="grey")[0]
-        for i, marker in enumerate(set(markers))]
-    leg2 = plt.legend(
-        handles=h, 
-        labels=sample_ratio_to_marker_map.keys() if markers_signify=="sampling_rate" else prune_strat_to_marker_map.keys(), 
-        loc="lower left", 
-        title="Sampling rate")
-    ax.add_artist(leg2)
+
+    if markers:
+        h = [
+            plt.plot([],[], marker=marker, ls="None", color="grey")[0]
+            for i, marker in enumerate(set(markers))]
+        leg2 = plt.legend(
+            handles=h, 
+            labels=sample_ratio_to_marker_map.keys() if markers_signify=="sampling_rate" else prune_strat_to_marker_map.keys(), 
+            loc="lower left", 
+            title="Sampling rate")
+        ax.add_artist(leg2)
 
     h = [
         plt.plot([],[], marker='o', ls="", color="grey", ms=size/25)[0]
@@ -200,3 +208,8 @@ def scatterplot(x, y, point_data, ylabel="", xlabel=""):
     ax.add_artist(leg3)
 
     plt.show()
+
+
+    if filename:
+        full_fname = "viz_" + settings.stats.filename + "_" + filename + ".pdf"
+        fig.savefig("figures/" + full_fname, format="pdf")
