@@ -6,13 +6,24 @@ import gc
 
 import psutil
 from compute_stats import make_statistics
-from compute_structures import KeyStatEncoder
+from compute_structures import KeyStatEncoder, StatType
+from settings import settings
+
+st_map = {
+    "h": StatType.HISTOGRAM,
+    "hist": StatType.HISTOGRAM,
+    "histogram": StatType.HISTOGRAM,
+    "ndv": StatType.BASIC_NDV,
+}
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print("Usage: file.py input_path output_path", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print("Usage: file.py input_path output_path [stats_type]", file=sys.stderr)
 
-    _, in_path, out_path = sys.argv
+    _, in_path, out_path, *_stats_type = sys.argv
+    stats_type = st_map[_stats_type[0]] if _stats_type else settings.stats.stats_type
+    settings.stats.stats_type = stats_type
+    settings.stats.force_new = True
 
     # Simple case: input path is a json file 
     if in_path.endswith(".json"):
