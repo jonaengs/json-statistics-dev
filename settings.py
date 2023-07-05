@@ -24,10 +24,10 @@ settings = munchify({
         "force_new": True,
         "sampling_rate": 0.0,  # This is really the inverse of the sampling rate -- setting it to 1 excludes everything. TODO: fix
         "hyperloglog_error": 0.05,
-        "num_histogram_buckets": 128,
+        "num_histogram_buckets": 64,
 
         "singleton_plus_enabled": True,
-        "enum_statistics_enabled": True,
+        "enum_statistics_enabled": False,
 
         "key_path_key_sep": '.',
         "key_path_type_sep": '_', # '/'
