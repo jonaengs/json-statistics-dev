@@ -43,15 +43,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # Arguments that touch settings
-    parser.add_argument("stats.filename", nargs="?", help="name of file to use as data src (training or test)")
-    parser.add_argument("-d", "--data-dir", dest="stats.data_source")
+    parser.add_argument("stats.filename", nargs="?", help="name of file to use as data src (e.g., 'training', 'test' for Twitter data)")
+    parser.add_argument("-d", "--data-dir", dest="stats.data_source", help="directory to look for the argument file in.")
     parser.add_argument("-q", "--quiet", dest="logger.silenced", action="store_true", help="stop logger printing to stdout")
     parser.add_argument("-n", "--new", dest="stats.force_new", action="store_true", help="Force creation of fresh statistics", default=settings.stats.force_new)
     parser.add_argument("-s", "--stats_type", dest="stats.stats_type", choices=StatType._member_names_, action=EnumAction.create(StatType))
     parser.add_argument("-p", "--prune_strats", dest="stats.prune_strats", choices=PruneStrat._member_names_, nargs="*", action=EnumAction.create(PruneStrat))
 
     # Arguments that don't touch settings
-    parser.add_argument("-m", "--mode", choices=["a", "v"], nargs="*", help="Which path to execute. Can do multiple. Separate with space.", default=[])
+    parser.add_argument("-m", "--mode", choices=["a", "v"], nargs="*", help="a => Run analysis/experiment. v => visualize the results of the most recent experiment", default=[])
 
     args = parser.parse_args()
     update_settings(args, exclude_list=["mode"])
