@@ -23,7 +23,7 @@ from logger import log
 import data_cache
 from visualize import pause_for_visuals, plot_errors, scatterplot
 from trackers import time_tracker, global_mem_tracker
-from notebooks.error_functions import symmetric_mean_absolute_relative_error as SMARE
+from notebooks.error_functions import mean_abs_log_relative_error, mean_absolute_relative_error, symmetric_mean_absolute_relative_error as SMARE
 
 
 # Used to create ranges of real numbers used to stand in for python's builtin integer ranges
@@ -767,6 +767,7 @@ def examine_analysis_results():
             data = pickle.load(f)
 
         errors, stats_sizes, stats_infos = [], [], []
+        print(len(data))
         for tup in data:
 
             if tup[0]["stats_type"] in (StatType.BASIC, StatType.BASIC_NDV):
@@ -780,8 +781,8 @@ def examine_analysis_results():
             #     #     continue
             #     continue
 
-            if tup[0]["sampling_rate"] != 0.0:
-                continue
+            # if tup[0]["sampling_rate"] != 0.0:
+            #     continue
 
             if tup[0].get("num_histogram_buckets", 0) > 128:
                 continue
@@ -795,13 +796,15 @@ def examine_analysis_results():
 
             predicate = lambda err_arr, operation: \
                 len(err_arr) > 0 and operation in (
-                        # "exists", "is_null", "is_not_null",
+                        "exists", "is_null", "is_not_null",
                         "eq", "gt", "lt",
-                        # "memberof", "contains", "overlaps"    
+                        "memberof", "contains", "overlaps"    
                     )
             
             all_mean_errs = [
-                SMARE(*zip(*err_arr))
+                # SMARE(*zip(*err_arr))
+                # mean_abs_log_relative_error(*zip(*err_arr))
+                mean_absolute_relative_error(*zip(*err_arr))
                 for operation, err_arr in tup[2].items()
                 if predicate(err_arr, operation)
             ]
@@ -841,9 +844,12 @@ def examine_analysis_results():
         ylabel = "Size (in Bytes)"
         # ylabel = "Creation Time (in seconds)"
         # ylabel = "Maximum Memory Use (in MB)"
-        xlabel = "Average SMAPE Across Operations"
+        # xlabel = "Average SMAPE Across Operations"
+        xlabel = "Average Absolute Error (Log Scale) Across Operations"
         scatterplot(errors, stats_sizes, stats_infos, ylabel=ylabel, xlabel=xlabel,
-                    filename="size_v_err_no_sampling_no_unary_array_ops")
+                    filename="size_v_abs_log_err_all_sampling"
+                    # filename="size_v_err_no_sampling_no_unary_array_ops"
+                    )
 
 
     # The query stats is a override_settings dict matching the settings you're looking for.

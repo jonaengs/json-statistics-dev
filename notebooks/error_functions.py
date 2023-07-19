@@ -49,6 +49,12 @@ def mean_log_relative_error(truth_arr, estimate_arr):
     summed = sum(starmap(log_relative_error, zip(truth_arr, estimate_arr)))
     return summed / len(truth_arr)
 
+def mean_abs_log_relative_error(truth_arr, estimate_arr):
+    assert(len(truth_arr) == len(estimate_arr))
+    
+    summed = sum(map(abs, starmap(log_relative_error, zip(truth_arr, estimate_arr))))
+    return summed / len(truth_arr)
+
 
 # MSE (aka MSD)
 def mean_squared_error(truth_arr, estimate_arr):

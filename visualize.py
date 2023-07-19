@@ -45,10 +45,17 @@ def plot_errors(data: dict[str, list[float]], title_data: dict|str):
     plt.show()
 
 
+def dedup(l: list):
+    out = []
+    for e in l:
+        if e not in out:
+            out.append(e)
+    return out
+
 # Hover code inspiration: https://stackoverflow.com/a/47166787/8132000
 # Marker code inspiration: https://stackoverflow.com/a/52303895/8132000
 def scatterplot(x, y, point_data, ylabel="", xlabel="", filename=None):
-    markers_signify: Literal["sampling_rate", "prune_strats"] | None = None
+    markers_signify: Literal["sampling_rate", "prune_strats"] | None = "sampling_rate"
 
     allowed_markers = ['o', 'v', 'P', '*', 'X']
     colors = [setting["stats_type"].value for setting in point_data]
@@ -167,8 +174,8 @@ def scatterplot(x, y, point_data, ylabel="", xlabel="", filename=None):
     ax.set_ylabel(ylabel)#, fontsize=25)
     ax.set_xlabel(xlabel)#, fontsize=25)
 
-    ax.set(ylim=(1, 200_001))
-    ax.set(xlim=(0.1, 2.02))
+    # ax.set(ylim=(1, 200_001))
+    # ax.set(xlim=(0.1, 2.02))
 
     ## ANNOTATIONS ##
     annotation = ax.annotate("", xy=(0, 0), xytext=(10, -20), textcoords="offset points", bbox={"boxstyle": "round", "fc": "w"})
@@ -189,7 +196,8 @@ def scatterplot(x, y, point_data, ylabel="", xlabel="", filename=None):
     if markers:
         h = [
             plt.plot([],[], marker=marker, ls="None", color="grey")[0]
-            for i, marker in enumerate(set(markers))]
+            # for i, marker in enumerate(set(markers))]
+            for i, marker in enumerate(dedup(markers))]
         leg2 = plt.legend(
             handles=h, 
             labels=sample_ratio_to_marker_map.keys() if markers_signify=="sampling_rate" else prune_strat_to_marker_map.keys(), 
@@ -209,6 +217,8 @@ def scatterplot(x, y, point_data, ylabel="", xlabel="", filename=None):
 
     plt.show()
 
+
+    return fig, ax
 
     if filename:
         full_fname = "viz_" + settings.stats.filename + "_" + filename + ".pdf"
